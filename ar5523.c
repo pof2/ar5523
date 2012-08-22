@@ -69,7 +69,7 @@ enum {
 	usb_rcvbulkpipe((dev), AR5523_DATA_RX_PIPE)
 
 enum {
-	// XXX: msec or HZ?
+	/* XXX: msec or HZ? */
 	AR5523_DATA_TIMEOUT		= 10000,
 	AR5523_CMD_TIMEOUT		= 1000,
 };
@@ -100,7 +100,6 @@ struct ar5523_rx_cmd {
 struct ar5523_tx_data {
 	struct ar5523		*ar;
 	struct sk_buff		*skb;
-	struct ieee80211_tx_control *control;
 };
 
 struct ar5523_rx_data {
@@ -129,7 +128,7 @@ struct ar5523 {
 
 	struct ieee80211_channel channels[14];
 	struct ieee80211_rate	 rates[12];
-	struct ieee80211_hw_mode modes[2];
+	struct ieee80211_supported_band band;
 	int			mode;
 
 };
@@ -416,12 +415,13 @@ static int ar5523_set_chan(struct ar5523 *ar, struct ieee80211_conf *conf)
 
 	memset(&chan, 0, sizeof(chan));
 	chan.flags  = cpu_to_be32(0x1400);
-	chan.freq   = cpu_to_be32(conf->freq);
+	chan.freq   = cpu_to_be32(conf->channel->center_freq);
 	chan.magic1 = cpu_to_be32(20);
 	chan.magic2 = cpu_to_be32(50);
 	chan.magic3 = cpu_to_be32(1);
 
-	ar5523_dbg(ar, "switching to channel %d\n", conf->channel);
+	ar5523_dbg(ar, "switching to channel %d\n",
+		   ieee80211_frequency_to_channel(conf->channel->center_freq));
 
 	return ar5523_cmd_write(ar, AR5523_CMD_SET_CHAN,
 				&chan, sizeof(chan), 0);
@@ -499,20 +499,14 @@ static int ar5523_tx_null(struct ar5523 *ar)
 	return error;
 }
 
-static int ar5523_set_rates(struct ar5523 *ar, struct ieee80211_if_conf *ifconf)
+static int ar5523_set_rates(struct ar5523 *ar,
+			    struct ieee80211_bss_conf *ifconf)
 {
         struct ar5523_cmd_rates rates;
 
 	memset(&rates, 0, sizeof(rates));
 	rates.magic1 = cpu_to_be32(0x02);
-#if 0
-	rates.size   = cpu_to_be32(1 + sizeof(rates.rates));
-	rates.nrates = rs->rs_nrates;
-	memcpy(rates.rates, rs->rs_rates, rs->rs_nrates);
-#endif
-	
-//	ar5523_dbg(ar, "setting supported rates nrates=%d\n", rs->rs_nrates);
-	
+
 	return ar5523_cmd_write(ar, AR5523_CMD_SET_RATES,
 				&rates, sizeof(rates), 0);
 }
@@ -530,15 +524,21 @@ static void ar5523_data_rx_cb(struct urb *urb)
 	int error;
 
 	/* sync/async unlink faults aren't errors */
-	if (urb->status) {
-		ar5523_dbg(ar, "non-zero write bulk status received: %d\n",
-			       urb->status);
+	if (urb->status && (urb->status != -ENOENT &&
+	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
+		ar5523_dbg(ar,
+			   "nonzero write bulk status received: %d\n",
+			   urb->status);
 		goto skip;
+	}
+
+	if (urb->status) {
+		/* do not try to resubmit urb */
+		return;
 	}
 
 	if (len < AR5523_MIN_RXBUFSZ) {
 		ar5523_err(ar, "wrong xfer size (len=%d)\n", len);
-//		ifp->if_ierrors++;
 		goto skip;
 	}
 
@@ -551,7 +551,6 @@ static void ar5523_data_rx_cb(struct urb *urb)
 	if (be32_to_cpu(desc->len) > ar->rxbufsz) {
 		ar5523_err(ar, "bad descriptor (len=%d)\n",
 			       be32_to_cpu(desc->len));
-//		ifp->if_ierrors++;
 		goto skip;
 	}
 
@@ -574,12 +573,12 @@ static void ar5523_data_rx_cb(struct urb *urb)
 	 * need to poke into the descriptor if there might be more useful
 	 * information in there.
 	 */
-	rx_status.freq =  be32_to_cpu(desc->freq);
-	rx_status.channel = hw->conf.channel;
-	rx_status.phymode = hw->conf.phymode;
-	rx_status.ssi = be32_to_cpu(desc->rssi);
-	
-	ieee80211_rx_irqsafe(hw, data->skb, &rx_status);
+	rx_status.freq = be32_to_cpu(desc->freq);
+	rx_status.band = hw->conf.channel->band;
+	rx_status.signal = be32_to_cpu(desc->rssi);
+
+	memcpy(IEEE80211_SKB_RXCB(data->skb), &rx_status, sizeof(rx_status));
+	ieee80211_rx_irqsafe(hw, data->skb);
 	
 	data->skb = __dev_alloc_skb(ar->rxbufsz, GFP_ATOMIC);
 	if (!data->skb) {
@@ -595,7 +594,7 @@ static void ar5523_data_rx_cb(struct urb *urb)
 
 	error = usb_submit_urb(urb, GFP_ATOMIC);
 	if (error) {
-		// XXX: handle
+		/* XXX: handle */
 		ar5523_err(ar, "error %d when resubmitting rx data urb\n",
 			       error);
 	}
@@ -704,16 +703,6 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	
 	ar5523_dbg(ar, "command 07h return code: %x\n", be32_to_cpu(val));
 
-#if 0
-	/* set default channel */
-	ic->ic_bss->ni_chan = ic->ic_ibss_chan;
-	error = ar5523_set_chan(ar, ic->ic_bss->ni_chan);
-	if (error) {
-		ar5523_err(ar, "could not set channel\n");
-		goto fail;
-	}
-#endif
-
 	error = ar5523_wme_init(ar);
 	if (error) {
 		ar5523_err(ar, "could not setup WME parameters\n");
@@ -786,29 +775,30 @@ static void ar5523_data_tx_cb(struct urb *urb)
 	struct sk_buff *skb = urb->context;
 	struct ar5523_tx_data *data = (struct ar5523_tx_data *)skb->cb;
 	struct ar5523 *ar = data->ar;
-	struct ieee80211_tx_status status = { {0} };
+	struct ieee80211_tx_info *txi;
 
 	ar5523_dbg(ar, "data tx urb completed\n");
 
 	/* sync/async unlink faults aren't errors */
-	if (urb->status) {
-		ar5523_dbg(ar, "non-zero write bulk status received: %d\n",
-			       urb->status);
+	if (urb->status && (urb->status != -ENOENT &&
+	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
+		ar5523_dbg(ar,
+			   "nonzero write bulk status received: %d\n",
+			   urb->status);
 		goto out;
 	}
 
-	memcpy(&status.control, data->control, sizeof(status.control));
+	txi = IEEE80211_SKB_CB(skb);
 	skb_pull(skb, sizeof(struct ar5523_tx_desc) + sizeof(__be32));
 
-	status.flags |= IEEE80211_TX_STATUS_ACK;
-	ieee80211_tx_status_irqsafe(ar->hw, skb, &status);
+	txi->flags |= IEEE80211_TX_STAT_ACK;
+	ieee80211_tx_status_irqsafe(ar->hw, skb);
  out:
 	atomic_dec(&ar->tx_data_queued);
 	usb_free_urb(urb);
 }
 
-static int ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb,
-		struct ieee80211_tx_control *control)
+static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct ieee80211_hdr *wh = (struct ieee80211_hdr *)skb->data;
 	struct ar5523 *ar = hw->priv;
@@ -823,7 +813,7 @@ static int ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb,
 
 	if (atomic_read(&ar->tx_data_queued) >= AR5523_TX_DATA_COUNT) {
 		ar5523_dbg(ar, "tx queue full\n");
-		return NETDEV_TX_BUSY;
+		return;
 	}
 
 	urb = usb_alloc_urb(0, GFP_ATOMIC);
@@ -833,10 +823,6 @@ static int ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb,
 	
 	data = (struct ar5523_tx_data *)skb->cb;
 	data->ar = ar;
-
-	data->control = kmemdup(control, sizeof(*control), GFP_ATOMIC);
-	if (!data->control)
-		goto out_free_urb;
 
 	desc = (struct ar5523_tx_desc *)skb_push(skb, sizeof(*desc));
 	hdr = (__be32 *)skb_push(skb, sizeof(__be32));
@@ -868,40 +854,38 @@ static int ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb,
 	error = usb_submit_urb(urb, GFP_ATOMIC);
 	if (error) {
 		ar5523_err(ar, "error %d when submitting tx urb\n", error);
-		goto out_free_control;
+		goto out_free_urb;
 	}
 
 
 	atomic_inc(&ar->tx_data_queued);
 
-	return NETDEV_TX_OK;
+	return;
 
- out_free_control:
-	kfree(control);
  out_free_urb:
 	usb_free_urb(urb);
  out_free_skb:
 	kfree_skb(skb);
-	return NETDEV_TX_BUSY;
+	return;
 }
 
 static int ar5523_add_interface(struct ieee80211_hw *hw,
-		struct ieee80211_if_init_conf *conf)
+		struct ieee80211_vif *vif)
 {
 	struct ar5523 *ar = hw->priv;
 
 	ar5523_dbg(ar, "add interface called\n");
 
-	/* NOTE: using IEEE80211_IF_TYPE_MNTR to indicate no mode selected */
-	if (ar->mode != IEEE80211_IF_TYPE_MNTR) {
+	/* NOTE: using NL80211_IFTYPE_MONITOR to indicate no mode selected */
+	if (ar->mode != NL80211_IFTYPE_MONITOR) {
 		ar5523_dbg(ar, "invalid add_interface\n");
 		return -EOPNOTSUPP;
 	}
 
-	switch (conf->type) {
-	case IEEE80211_IF_TYPE_STA:
-	case IEEE80211_IF_TYPE_MNTR:
-		ar->mode = conf->type;
+	switch (vif->type) {
+	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_MONITOR:
+		ar->mode = vif->type;
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -911,18 +895,19 @@ static int ar5523_add_interface(struct ieee80211_hw *hw,
 }
 
 static void ar5523_remove_interface(struct ieee80211_hw *hw,
-		struct ieee80211_if_init_conf *conf)
+		struct ieee80211_vif *vif)
 {
 	struct ar5523 *ar = hw->priv;
 
 	ar5523_dbg(ar, "remove interface called\n");
 
-	ar->mode = IEEE80211_IF_TYPE_MNTR;
+	ar->mode = NL80211_IFTYPE_MONITOR;
 }
 
-static int ar5523_config(struct ieee80211_hw *hw, struct ieee80211_conf *conf)
+static int ar5523_config(struct ieee80211_hw *hw, u32 changed)
 {
 	struct ar5523 *ar = hw->priv;
+	struct ieee80211_conf *conf = &hw->conf;
 	__be32 val;
 	int error;
 
@@ -966,8 +951,10 @@ static int ar5523_config(struct ieee80211_hw *hw, struct ieee80211_conf *conf)
 	return 0;
 }
 
-static int ar5523_config_interface(struct ieee80211_hw *hw, int if_id,
-		struct ieee80211_if_conf *ifconf)
+static void ar5523_bss_info_changed(struct ieee80211_hw *hw,
+		struct ieee80211_vif *vif,
+		struct ieee80211_bss_conf *ifconf,
+		u32 changed)
 {
 	struct ar5523 *ar = hw->priv;
 	struct ar5523_cmd_bssid bssid;
@@ -976,9 +963,12 @@ static int ar5523_config_interface(struct ieee80211_hw *hw, int if_id,
 	__be32 val;
 	int error;
 
-	ar5523_dbg(ar, "config_interface called\n");
+	ar5523_dbg(ar, "bss_info_changed called\n");
 
 	ar5523_cmd_write(ar, AR5523_CMD_24, NULL, 0, 0);
+
+	if (!(changed & BSS_CHANGED_BSSID))
+		return;
 
 	memset(&bssid, 0, sizeof(bssid));
 	bssid.len = cpu_to_be32(AR5523_ADDR_LEN);
@@ -999,7 +989,7 @@ static int ar5523_config_interface(struct ieee80211_hw *hw, int if_id,
 	error = ar5523_set_rates(ar, ifconf);
 	if (error) {
 		ar5523_err(ar, "could not set negotiated rate set\n");
-		return error;
+		return;
 	}
 
 
@@ -1025,13 +1015,11 @@ static int ar5523_config_interface(struct ieee80211_hw *hw, int if_id,
 
 	/* start statistics timer */
 	mod_timer(&ar->stat_timer, jiffies + HZ);
-
-	return 0;
 }
 
 static void ar5523_configure_filter(struct ieee80211_hw *hw,
 		unsigned int changed_flags, unsigned int *total_flags,
-		int mc_count, struct dev_addr_list *mc_list)
+		u64 multicast)
 {
 	struct ar5523 *ar = hw->priv;
 
@@ -1049,7 +1037,7 @@ static const struct ieee80211_ops ar5523_ops = {
 	.add_interface		= ar5523_add_interface,
 	.remove_interface	= ar5523_remove_interface,
 	.config			= ar5523_config,
-	.config_interface	= ar5523_config_interface,
+	.bss_info_changed	= ar5523_bss_info_changed,
 	.configure_filter	= ar5523_configure_filter,
 };
 
@@ -1076,10 +1064,17 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
 	int error;
 
 	/* sync/async unlink faults aren't errors */
-	if (urb->status) {
-		ar5523_dbg(ar, "non-zero write bulk status received: %d\n",
-			       urb->status);
+	if (urb->status && (urb->status != -ENOENT &&
+	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
+		ar5523_dbg(ar,
+			   "nonzero write bulk status received: %d\n",
+			   urb->status);
 		goto resubmit;
+	}
+
+	if (urb->status) {
+		/* do not try to resubmit urb */
+		return;
 	}
 
 	switch (be32_to_cpu(hdr->code) & 0xff) {
@@ -1109,7 +1104,7 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
  resubmit:
 	error = usb_submit_urb(urb, GFP_ATOMIC);
 	if (error) {
-		// XXX: handle
+		/* XXX: handle */
 		ar5523_err(ar, "error %d when resubmitting rx urb\n", error);
 	}
 }
@@ -1122,8 +1117,8 @@ static void ar5523_free_tx_cmds(struct ar5523 *ar)
 		struct ar5523_tx_cmd *cmd = &ar->tx_cmd[i];
 
 		usb_kill_urb(cmd->urb);
-		usb_buffer_free(ar->dev, AR5523_MAX_TXCMDSZ,
-				cmd->buf, cmd->urb->transfer_dma);
+		usb_free_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
+				  cmd->buf, cmd->urb->transfer_dma);
 		usb_free_urb(cmd->urb);
 	}
 }
@@ -1142,8 +1137,8 @@ static int ar5523_alloc_tx_cmds(struct ar5523 *ar)
 			ar5523_err(ar, "could not allocate tx urb\n");
 			goto out;
 		}
-		cmd->buf = usb_buffer_alloc(ar->dev, AR5523_MAX_TXCMDSZ,
-					    GFP_KERNEL,
+		cmd->buf = usb_alloc_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
+					      GFP_KERNEL,
 					    &cmd->urb->transfer_dma);
 		if (!cmd->buf) {
 			ar5523_err(ar, "could not allocate tx buffer\n");
@@ -1159,8 +1154,8 @@ static int ar5523_alloc_tx_cmds(struct ar5523 *ar)
  	while (--i >= 0) {
 		struct ar5523_tx_cmd *cmd = &ar->tx_cmd[i];
 
-		usb_buffer_free(ar->dev, AR5523_MAX_TXCMDSZ,
-				cmd->buf, cmd->urb->transfer_dma);
+		usb_free_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
+				  cmd->buf, cmd->urb->transfer_dma);
 		usb_free_urb(cmd->urb);
 	}
 
@@ -1175,8 +1170,8 @@ static void ar5523_free_rx_cmds(struct ar5523 *ar)
 		struct ar5523_rx_cmd *cmd = &ar->rx_cmd[i];
 
 		usb_kill_urb(cmd->urb);
-		usb_buffer_free(ar->dev, AR5523_MAX_RXCMDSZ,
-				cmd->buf, cmd->urb->transfer_dma);
+		usb_free_coherent(ar->dev, AR5523_MAX_RXCMDSZ,
+				  cmd->buf, cmd->urb->transfer_dma);
 		usb_free_urb(cmd->urb);
 	}
 }
@@ -1195,9 +1190,9 @@ static int ar5523_alloc_rx_cmds(struct ar5523 *ar)
 			ar5523_err(ar, "could not allocate rx urb\n");
 			goto out;
 		}
-		cmd->buf = usb_buffer_alloc(ar->dev, AR5523_MAX_TXCMDSZ,
-					    GFP_KERNEL,
-					    &cmd->urb->transfer_dma);
+		cmd->buf = usb_alloc_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
+					      GFP_KERNEL,
+					      &cmd->urb->transfer_dma);
 		if (!cmd->buf) {
 			ar5523_err(ar, "could not allocate rx buffer\n");
 			usb_free_urb(cmd->urb);
@@ -1213,8 +1208,8 @@ static int ar5523_alloc_rx_cmds(struct ar5523 *ar)
 		if (error) {
 			ar5523_err(ar, "error %d when submitting rx urb\n",
 				       error);
-			usb_buffer_free(ar->dev, AR5523_MAX_RXCMDSZ,
-					cmd->buf, cmd->urb->transfer_dma);
+			usb_free_coherent(ar->dev, AR5523_MAX_RXCMDSZ,
+					  cmd->buf, cmd->urb->transfer_dma);
 			usb_free_urb(cmd->urb);
 			return error;
 		}
@@ -1228,8 +1223,8 @@ static int ar5523_alloc_rx_cmds(struct ar5523 *ar)
 
 		usb_kill_urb(cmd->urb);
 
-		usb_buffer_free(ar->dev, AR5523_MAX_RXCMDSZ,
-				cmd->buf, cmd->urb->transfer_dma);
+		usb_free_coherent(ar->dev, AR5523_MAX_RXCMDSZ,
+				  cmd->buf, cmd->urb->transfer_dma);
 		usb_free_urb(cmd->urb);
 	}
 
@@ -1280,15 +1275,16 @@ static int ar5523_reset(struct ar5523 *ar)
 static int ar5523_query_eeprom(struct ar5523 *ar)
 {
         int error;
+	u8 perm_addr[ETH_ALEN];
 	__be32 tmp;
 
 	/* retrieve MAC address */
-	error = ar5523_read_eeprom(ar, AR5523_EEPROM_MACADDR,
-				   &ar->hw->wiphy->perm_addr);
+	error = ar5523_read_eeprom(ar, AR5523_EEPROM_MACADDR, perm_addr);
 	if (error) {
 		ar5523_err(ar, "could not read MAC address\n");
 		return error;
 	}
+	SET_IEEE80211_PERM_ADDR(ar->hw, perm_addr);
 
 	/* retrieve the maximum frame size that the hardware can receive */
 	error = ar5523_read_eeprom(ar, AR5523_EEPROM_RXBUFSZ, &tmp);
@@ -1307,101 +1303,51 @@ static int ar5523_query_eeprom(struct ar5523 *ar)
  * to common code as in OpenBSD.
  */
 static const struct ieee80211_rate ar5523_rates[] = {
-        { .rate = 10,
-	  .val = 0,
-	  .flags = IEEE80211_RATE_CCK },
-	{ .rate = 20,
-	  .val = 1,
-	  .flags = IEEE80211_RATE_CCK },
-	{ .rate = 55,
-	  .val = 2,
-	  .flags = IEEE80211_RATE_CCK },
-	{ .rate = 110,
-	  .val = 3,
-	  .flags = IEEE80211_RATE_CCK },
-	{ .rate = 60,
-	  .val = 4,
-	  .flags = IEEE80211_RATE_OFDM },
-	{ .rate = 90,
-	  .val = 5,
-	  .flags = IEEE80211_RATE_OFDM },
-	{ .rate = 120,
-	  .val = 6,
-	  .flags = IEEE80211_RATE_OFDM },
-	{ .rate = 180,
-	  .val = 7,
-	  .flags = IEEE80211_RATE_OFDM },
-	{ .rate = 240,
-	  .val = 8,
-	  .flags = IEEE80211_RATE_OFDM },
-	{ .rate = 360,
-	  .val = 9,
-	  .flags = IEEE80211_RATE_OFDM },
-	{ .rate = 480,
-	  .val = 10,
-	  .flags = IEEE80211_RATE_OFDM },
-	{ .rate = 540,
-	  .val = 11,
-	  .flags = IEEE80211_RATE_OFDM },
+	{ .bitrate = 10, .hw_value = 0, },
+	{ .bitrate = 20, .hw_value = 1, },
+	{ .bitrate = 55, .hw_value = 2, },
+	{ .bitrate = 110, .hw_value = 3, },
+	{ .bitrate = 60, .hw_value = 4, },
+	{ .bitrate = 90, .hw_value = 5, },
+	{ .bitrate = 120, .hw_value = 6, },
+	{ .bitrate = 180, .hw_value = 7, },
+	{ .bitrate = 240, .hw_value = 8, },
+	{ .bitrate = 360, .hw_value = 9, },
+	{ .bitrate = 480, .hw_value = 10, },
+	{ .bitrate = 540, .hw_value = 11, },
 };
 
 static const struct ieee80211_channel ar5523_channels[] = {
-        { .chan = 1,
-	  .freq = 2412},
-	{ .chan = 2,
-	  .freq = 2417},
-	{ .chan = 3,
-	  .freq = 2422},
-	{ .chan = 4,
-	  .freq = 2427},
-	{ .chan = 5,
-	  .freq = 2432},
-	{ .chan = 6,
-	  .freq = 2437},
-	{ .chan = 7,
-	  .freq = 2442},
-	{ .chan = 8,
-	  .freq = 2447},
-	{ .chan = 9,
-	  .freq = 2452},
-	{ .chan = 10,
-	  .freq = 2457},
-	{ .chan = 11,
-	  .freq = 2462},
-	{ .chan = 12,
-	  .freq = 2467},
-	{ .chan = 13,
-	  .freq = 2472},
-	{ .chan = 14,
-	  .freq = 2484},
+	{ .center_freq = 2412 },
+	{ .center_freq = 2417 },
+	{ .center_freq = 2422 },
+	{ .center_freq = 2427 },
+	{ .center_freq = 2432 },
+	{ .center_freq = 2437 },
+	{ .center_freq = 2442 },
+	{ .center_freq = 2447 },
+	{ .center_freq = 2452 },
+	{ .center_freq = 2457 },
+	{ .center_freq = 2462 },
+	{ .center_freq = 2467 },
+	{ .center_freq = 2472 },
+	{ .center_freq = 2484 },
 };
 
 static int ar5523_init_modes(struct ar5523 *ar)
 {
-	int error;
+	BUILD_BUG_ON(sizeof(ar->channels) != sizeof(ar5523_channels));
+	BUILD_BUG_ON(sizeof(ar->rates) != sizeof(ar5523_rates));
 
 	memcpy(ar->channels, ar5523_channels, sizeof(ar5523_channels));
 	memcpy(ar->rates, ar5523_rates, sizeof(ar5523_rates));
 
-	ar->modes[0].mode	= MODE_IEEE80211G;
-	ar->modes[0].num_rates	= ARRAY_SIZE(ar5523_rates);
-	ar->modes[0].rates	= ar->rates;
-	ar->modes[0].num_channels = ARRAY_SIZE(ar5523_channels);
-	ar->modes[0].channels	= ar->channels;
-
-	error = ieee80211_register_hwmode(ar->hw, &ar->modes[0]);
-	if (error)
-		return error;
-
-	ar->modes[1].mode	= MODE_IEEE80211B;
-	ar->modes[1].num_rates	= 4;
-	ar->modes[1].rates	= ar->rates;
-	ar->modes[1].num_channels = ARRAY_SIZE(ar5523_channels);
-	ar->modes[1].channels	= ar->channels;
-
-	error = ieee80211_register_hwmode(ar->hw, &ar->modes[1]);
-	if (error)
-		return error;
+	ar->band.band = IEEE80211_BAND_2GHZ;
+	ar->band.channels = ar->channels;
+	ar->band.n_channels = ARRAY_SIZE(ar5523_channels);
+	ar->band.bitrates = ar->rates;
+	ar->band.n_bitrates = ARRAY_SIZE(ar5523_rates);
+	ar->hw->wiphy->bands[IEEE80211_BAND_2GHZ] = &ar->band;
 
 	return 0;
 }
@@ -1417,7 +1363,7 @@ static int ar5523_load_firmware(struct usb_device *dev)
 	const struct firmware *fw;
 	void *fwbuf;
 	int len, offset;
-	int foolen; // XXX(hch): handle short transfers
+	int foolen; /* XXX(hch): handle short transfers */
 	int error = -ENXIO;
 	
 	if (request_firmware(&fw, AR5523_FIRMWARE_FILE, &dev->dev)) {
@@ -1558,10 +1504,11 @@ static int ar5523_probe(struct usb_interface *intf,
 
 	setup_timer(&ar->stat_timer, ar5523_stat, (unsigned long)ar);
 
-	ar->mode = IEEE80211_IF_TYPE_MNTR;
+	ar->mode = NL80211_IFTYPE_MONITOR;
 
 	hw->flags |= IEEE80211_HW_RX_INCLUDES_FCS;
 	hw->extra_tx_headroom = sizeof(struct ar5523_tx_desc) + sizeof(__be32);
+	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 	hw->queues = 1;
 
 	error = ar5523_init_modes(ar);
@@ -1628,8 +1575,10 @@ static struct usb_device_id ar5523_id_table[] = {
 	AR5523_DEVICE_UX(0x2001, 0x3a04),	/* Dlink / DWLAG122 */
 	AR5523_DEVICE_UG(0x1690, 0x0712),	/* Gigaset / AR5523 */
 	AR5523_DEVICE_UG(0x1690, 0x0710),	/* Gigaset / SMCWUSBTG */
+	AR5523_DEVICE_UG(0x129b, 0x160c),	/* Gigaset / USB stick 108 (CyberTAN Technology) */
 	AR5523_DEVICE_UG(0x16ab, 0x7801),	/* Globalsun / AR5523_1 */
 	AR5523_DEVICE_UX(0x16ab, 0x7811),	/* Globalsun / AR5523_2 */
+	AR5523_DEVICE_UG(0x0d8e, 0x7802),	/* Globalsun / AR5523_3 */
 	AR5523_DEVICE_UX(0x0846, 0x4300),	/* Netgear / WG111U */
 	AR5523_DEVICE_UG(0x0846, 0x4250),	/* Netgear / WG111T */
 	AR5523_DEVICE_UG(0x0846, 0x5f00),	/* Netgear / WPN111 */
@@ -1640,6 +1589,7 @@ static struct usb_device_id ar5523_id_table[] = {
 	AR5523_DEVICE_UX(0x1435, 0x0828),	/* Wistronneweb / AR5523_2 */
 	AR5523_DEVICE_UG(0x0cde, 0x0012),	/* Zcom / AR5523 */
 	AR5523_DEVICE_UG(0x1385, 0x4250),	/* Netgear3 / WG111T (2) */
+	AR5523_DEVICE_UG(0x1385, 0x5f00),	/* Netgear / WPN111 */
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, ar5523_id_table);
@@ -1661,7 +1611,8 @@ static void __exit ar5523_exit(void)
 	usb_deregister(&ar5523_driver);
 }
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("Dual BSD/GPL");
+MODULE_FIRMWARE(AR5523_FIRMWARE_FILE);
 
 module_init(ar5523_init);
 module_exit(ar5523_exit);
