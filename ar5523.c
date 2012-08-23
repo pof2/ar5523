@@ -516,7 +516,7 @@ static void ar5523_data_rx_cb(struct urb *urb)
 	struct ar5523 *ar = data->ar;
 	struct ar5523_rx_desc *desc;
 	struct ieee80211_hw *hw = ar->hw;
-	struct ieee80211_rx_status rx_status = { 0 };
+	struct ieee80211_rx_status *rx_status;
 	int len = urb->actual_length;
 	int hdrlen, pad;
 	u32 hdr;
@@ -566,17 +566,13 @@ static void ar5523_data_rx_cb(struct urb *urb)
 		skb_pull(data->skb, pad);
 	}
 
-	/*
-	 * XXX: not a whole lot of information provided here..
-	 *
-	 * need to poke into the descriptor if there might be more useful
-	 * information in there.
-	 */
-	rx_status.freq = be32_to_cpu(desc->freq);
-	rx_status.band = hw->conf.channel->band;
-	rx_status.signal = be32_to_cpu(desc->rssi);
 
-	memcpy(IEEE80211_SKB_RXCB(data->skb), &rx_status, sizeof(rx_status));
+	rx_status = IEEE80211_SKB_RXCB(data->skb);
+	memset(rx_status, 0, sizeof(*rx_status));
+	rx_status->freq = be32_to_cpu(desc->freq);
+	rx_status->band = hw->conf.channel->band;
+	rx_status->signal = -95 + be32_to_cpu(desc->rssi);
+
 	ieee80211_rx_irqsafe(hw, data->skb);
 	
 	data->skb = __dev_alloc_skb(ar->rxbufsz, GFP_ATOMIC);
@@ -1509,7 +1505,8 @@ static int ar5523_probe(struct usb_interface *intf,
 
 	ar->mode = NL80211_IFTYPE_MONITOR;
 
-	hw->flags |= IEEE80211_HW_RX_INCLUDES_FCS;
+	hw->flags = IEEE80211_HW_RX_INCLUDES_FCS |
+		    IEEE80211_HW_SIGNAL_DBM;
 	hw->extra_tx_headroom = sizeof(struct ar5523_tx_desc) + sizeof(__be32);
 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 	hw->queues = 1;
