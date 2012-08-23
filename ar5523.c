@@ -823,7 +823,6 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	urb = usb_alloc_urb(0, GFP_ATOMIC);
 	if (!urb)
 		goto out_free_skb;
-	urb->context = skb;
 	
 	data = ar5523_get_tx_priv(skb);
 	data->ar = ar;
