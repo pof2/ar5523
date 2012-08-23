@@ -122,6 +122,7 @@ struct ar5523 {
 
 	struct timer_list	stat_timer;
 	struct completion	ready;
+	struct work_struct	stat_work;
 
 	int			rxbufsz;
 
@@ -146,7 +147,6 @@ enum {
 	AR5523_CMD_FLAG_ASYNC	= (1 << 0),
 	AR5523_CMD_FLAG_READ	= (1 << 1),
 	AR5523_CMD_FLAG_MAGIC	= (1 << 2),
-	AR5523_CMD_FLAG_ATOMIC	= (1 << 3),
 };
 
 #define ar5523_dbg(ar, format, arg...)            \
@@ -187,10 +187,7 @@ static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
 	struct ar5523_tx_cmd *cmd;
 	int xferlen, error;
 
-
 	if (atomic_read(&ar->tx_cmd_queued) >= AR5523_TX_CMD_COUNT) {
-		if (flags & AR5523_CMD_FLAG_ATOMIC)
-			return -EAGAIN;
 		wait_event(ar->tx_cmd_wait,
 			   (atomic_read(&ar->tx_cmd_queued) <
 			    AR5523_TX_CMD_COUNT));
@@ -223,8 +220,7 @@ static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
 		msleep_interruptible(200);
 	}
 
-	error = usb_submit_urb(cmd->urb, (flags & AR5523_CMD_FLAG_ATOMIC) ?
-					 GFP_ATOMIC : GFP_KERNEL);
+	error = usb_submit_urb(cmd->urb, GFP_KERNEL);
 	if (error) {
 		ar5523_err(ar, "could not send command 0x%x, error=%d\n",
 			       code, error);
@@ -235,7 +231,7 @@ static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
 
 	/* wait at most two seconds for command reply */
 	if ((flags & AR5523_CMD_FLAG_READ) ||
-	    !(flags & (AR5523_CMD_FLAG_ASYNC|AR5523_CMD_FLAG_ATOMIC))) {
+	    !(flags & AR5523_CMD_FLAG_ASYNC)) {
 		if (!wait_for_completion_timeout(&cmd->done, 2 * HZ)) {
 			cmd->odata = NULL;
 			ar5523_err(ar, "timeout waiting for command reply\n");
@@ -338,16 +334,20 @@ static int ar5523_read_eeprom(struct ar5523 *ar, u32 reg, void *odata)
  * Helpers.
  */
 
-static void ar5523_stat(unsigned long arg)
+static void ar5523_stat_work(struct work_struct *work)
 {
-	struct ar5523 *ar = (struct ar5523 *)arg;
-
+	struct ar5523 *ar = container_of(work, struct ar5523, stat_work);
 	/*
 	 * Send request for statistics asynchronously. The timer will be
 	 * restarted when we'll get the stats notification.
 	 */
-	ar5523_cmd_write(ar, AR5523_CMD_STATS, NULL, 0,
-			AR5523_CMD_FLAG_ATOMIC);
+	ar5523_cmd_write(ar, AR5523_CMD_STATS, NULL, 0, 0);
+}
+
+static void ar5523_stat(unsigned long arg)
+{
+	struct ar5523 *ar = (struct ar5523 *)arg;
+	ieee80211_queue_work(ar->hw, &ar->stat_work);
 }
 
 static int ar5523_set_led(struct ar5523 *ar, int which, int on)
@@ -1495,6 +1495,7 @@ static int ar5523_probe(struct usb_interface *intf,
 	init_completion(&ar->ready);
 	init_waitqueue_head(&ar->tx_cmd_wait);
 	atomic_set(&ar->tx_data_queued, 0);
+	INIT_WORK(&ar->stat_work, ar5523_stat_work);
 
 	error = ar5523_alloc_tx_cmds(ar);
 	if (error)
