@@ -99,7 +99,6 @@ struct ar5523_rx_cmd {
 
 struct ar5523_tx_data {
 	struct ar5523		*ar;
-	struct sk_buff		*skb;
 };
 
 struct ar5523_rx_data {
@@ -770,10 +769,15 @@ static int ar5523_set_rts_threshold(struct ieee80211_hw *hw, u32 value)
 	return ar5523_write_reg(ar, 0x09, value);
 }
 
+static inline struct ar5523_tx_data *ar5523_get_tx_priv(struct sk_buff *skb)
+{
+	return (struct ar5523_tx_data*) &IEEE80211_SKB_CB(skb)->driver_data;
+}
+
 static void ar5523_data_tx_cb(struct urb *urb)
 {
 	struct sk_buff *skb = urb->context;
-	struct ar5523_tx_data *data = (struct ar5523_tx_data *)skb->cb;
+	struct ar5523_tx_data *data = ar5523_get_tx_priv(skb);
 	struct ar5523 *ar = data->ar;
 	struct ieee80211_tx_info *txi;
 
@@ -821,7 +825,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 		goto out_free_skb;
 	urb->context = skb;
 	
-	data = (struct ar5523_tx_data *)skb->cb;
+	data = ar5523_get_tx_priv(skb);
 	data->ar = ar;
 
 	desc = (struct ar5523_tx_desc *)skb_push(skb, sizeof(*desc));
