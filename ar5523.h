@@ -34,12 +34,77 @@ struct ar5523_fwblock {
 	__be32		pad[123];
 };
 
-#define AR5523_MAX_RXCMDSZ	512
-#define AR5523_MAX_TXCMDSZ	512
+#define AR5523_MAX_RXCMDSZ	1024
+#define AR5523_MAX_TXCMDSZ	1024
 
 struct ar5523_cmd_hdr {
 	__be32		len;
 	__be32		code;
+/* NB: these are defined for rev 1.5 firmware; rev 1.6 is different */
+/* messages from Host -> Target */
+#define	WDCMSG_HOST_AVAILABLE		0x01
+#define WDCMSG_BIND			0x02
+#define WDCMSG_TARGET_RESET		0x03
+#define WDCMSG_TARGET_GET_CAPABILITY	0x04
+#define WDCMSG_TARGET_SET_CONFIG	0x05
+#define WDCMSG_TARGET_GET_STATUS	0x06
+#define WDCMSG_TARGET_GET_STATS		0x07
+#define WDCMSG_TARGET_START		0x08
+#define WDCMSG_TARGET_STOP		0x09
+#define WDCMSG_TARGET_ENABLE		0x0a
+#define WDCMSG_TARGET_DISABLE		0x0b
+#define	WDCMSG_CREATE_CONNECTION	0x0c
+#define WDCMSG_UPDATE_CONNECT_ATTR	0x0d
+#define	WDCMSG_DELETE_CONNECT		0x0e
+#define	WDCMSG_SEND			0x0f
+#define WDCMSG_FLUSH			0x10
+/* messages from Target -> Host */
+#define	WDCMSG_STATS_UPDATE		0x11
+#define	WDCMSG_BMISS			0x12
+#define	WDCMSG_DEVICE_AVAIL		0x13
+#define	WDCMSG_SEND_COMPLETE		0x14
+#define	WDCMSG_DATA_AVAIL		0x15
+#define	WDCMSG_SET_PWR_MODE		0x16
+#define	WDCMSG_BMISS_ACK		0x17
+#define	WDCMSG_SET_LED_STEADY		0x18
+#define	WDCMSG_SET_LED_BLINK		0x19
+/* more messages */
+#define	WDCMSG_SETUP_BEACON_DESC	0x1a
+#define	WDCMSG_BEACON_INIT		0x1b
+#define	WDCMSG_RESET_KEY_CACHE		0x1c
+#define	WDCMSG_RESET_KEY_CACHE_ENTRY	0x1d
+#define	WDCMSG_SET_KEY_CACHE_ENTRY	0x1e
+#define	WDCMSG_SET_DECOMP_MASK		0x1f
+#define	WDCMSG_SET_REGULATORY_DOMAIN	0x20
+#define	WDCMSG_SET_LED_STATE		0x21
+#define	WDCMSG_WRITE_ASSOCID		0x22
+#define	WDCMSG_SET_STA_BEACON_TIMERS	0x23
+#define	WDCMSG_GET_TSF			0x24
+#define	WDCMSG_RESET_TSF		0x25
+#define	WDCMSG_SET_ADHOC_MODE		0x26
+#define	WDCMSG_SET_BASIC_RATE		0x27
+#define	WDCMSG_MIB_CONTROL		0x28
+#define	WDCMSG_GET_CHANNEL_DATA		0x29
+#define	WDCMSG_GET_CUR_RSSI		0x2a
+#define	WDCMSG_SET_ANTENNA_SWITCH	0x2b
+#define	WDCMSG_USE_SHORT_SLOT_TIME	0x2f
+#define	WDCMSG_SET_POWER_MODE		0x30
+#define	WDCMSG_SETUP_PSPOLL_DESC	0x31
+#define	WDCMSG_SET_RX_MULTICAST_FILTER	0x32
+#define	WDCMSG_RX_FILTER		0x33
+#define	WDCMSG_PER_CALIBRATION		0x34
+#define	WDCMSG_RESET			0x35
+#define	WDCMSG_DISABLE			0x36
+#define	WDCMSG_PHY_DISABLE		0x37
+#define	WDCMSG_SET_TX_POWER_LIMIT	0x38
+#define	WDCMSG_SET_TX_QUEUE_PARAMS	0x39
+#define	WDCMSG_SETUP_TX_QUEUE		0x3a
+#define	WDCMSG_RELEASE_TX_QUEUE		0x3b
+#define	WDCMSG_SET_DEFAULT_KEY		0x43
+
+
+
+
 #define AR5523_CMD_SETUP		0x01
 #define AR5523_CMD_02		0x02
 #define AR5523_CMD_READ_MAC	0x03
@@ -49,7 +114,7 @@ struct ar5523_cmd_hdr {
 #define AR5523_CMD_07		0x07
 #define AR5523_CMD_SHUTDOWN	0x08
 #define AR5523_CMD_0B		0x0b
-#define AR5523_CMD_0C		0x0c
+#define AR5523_CREATE_CONNECTION 0x0c
 #define AR5523_CMD_0F		0x0f
 #define AR5523_NOTIF_STATS	0x10
 #define AR5523_NOTIF_READY	0x12
@@ -62,9 +127,10 @@ struct ar5523_cmd_hdr {
 #define AR5523_CMD_CRYPTO		0x1d
 #define AR5523_CMD_SET_STATE	0x20
 #define AR5523_CMD_SET_BSSID	0x21
+#define	AR5523_WRITE_ASSOCID	0x22
 #define AR5523_CMD_24		0x24
-#define AR5523_CMD_SET_RATES	0x26
-#define AR5523_CMD_27		0x27
+#define AR5523_CMD_SET_ADHOC_MODE	0x26
+#define AR5523_CMD_SET_BASIC_RATES	0x27
 #define AR5523_CMD_2E		0x2e
 #define AR5523_CMD_31		0x31
 #define AR5523_CMD_SET_FILTER	0x32
@@ -78,6 +144,19 @@ struct ar5523_cmd_hdr {
 	__be32		magic;
 	__be32		reserved2[4];
 };
+
+struct uath_cmd_host_available {
+	__be32	sw_ver_major;
+	__be32	sw_ver_minor;
+	__be32	sw_ver_patch;
+	__be32	sw_ver_build;
+} __packed;
+
+#define	ATH_SW_VER_MAJOR	1
+#define	ATH_SW_VER_MINOR	5
+#define	ATH_SW_VER_PATCH	0
+#define	ATH_SW_VER_BUILD	9999
+
 
 struct ar5523_rx_desc {
 	__be32		len;
@@ -122,12 +201,13 @@ struct ar5523_read_mac {
 	__u8		data[32];
 };
 
-/* structure for command AR5523_CMD_WRITE_MAC */
+/* structure for command UATH_CMD_WRITE_MAC */
 struct ar5523_write_mac {
-	__be32		reg;
-	__be32		len;
-	__u8		data[32];
-};
+	__be32	reg;
+	__be32	len;
+	u8		data[32];
+} __packed;
+
 
 /* structure for command AR5523_CMD_0B */
 struct ar5523_cmd_0b {
@@ -143,6 +223,62 @@ struct ar5523_cmd_0c {
 	__be32		magic2;
 	__be32		magic3;
 };
+
+
+struct ar5523_cmd_rateset {
+	__u8		length;
+#define AR5523_MAX_NRATES	32
+	__u8		set[AR5523_MAX_NRATES];
+};
+
+struct ar5523_cmd_set_associd {		/* AR5523_WRITE_ASSOCID */
+	__be32	defaultrateix;
+	__be32	associd;
+	__be32	timoffset;
+	__be32	turboprime;
+	__u8	bssid[6];
+} __packed;
+
+
+/* structure for command WDCMSG_SET_BASIC_RATE */
+struct ar5523_cmd_rates {
+	__be32	connid;
+	__be32	keeprccontent;
+	__be32	size;
+	struct ar5523_cmd_rateset rateset;
+} __packed;
+
+enum {
+	WLAN_MODE_NONE = 0,
+	WLAN_MODE_11b,
+	WLAN_MODE_11a,
+	WLAN_MODE_11g,
+	WLAN_MODE_11a_TURBO,
+	WLAN_MODE_11g_TURBO,
+	WLAN_MODE_11a_TURBO_PRIME,
+	WLAN_MODE_11g_TURBO_PRIME,
+	WLAN_MODE_11a_XR,
+	WLAN_MODE_11g_XR,
+};
+
+struct ar5523_cmd_connection_attr {
+	__be32	longpreambleonly;
+	struct ar5523_cmd_rateset	rateset;
+	__be32	wlanmode;
+} __packed;
+
+/* structure for command AR5523_CREATE_CONNECTION */
+struct ar5523_cmd_create_connection {
+	__be32	connid;
+	__be32	bssid;
+	__be32	size;
+	struct ar5523_cmd_connection_attr	connattr;
+} __packed;
+
+
+
+
+
 
 /* structure for command AR5523_CMD_SET_LED */
 struct ar5523_cmd_led {
@@ -182,15 +318,6 @@ struct ar5523_cmd_crypto {
 	__u8		magic3[136];
 };
 
-/* structure for command AR5523_CMD_SET_RATES */
-struct ar5523_cmd_rates {
-	__be32		magic1;
-	__be32		reserved;
-	__be32		size;
-	__u8		nrates;
-#define AR5523_MAX_NRATES	30
-	__u8		rates[AR5523_MAX_NRATES];
-};
 
 /* structure for command AR5523_CMD_SET_CHAN */
 struct ar5523_set_chan {
@@ -225,11 +352,28 @@ struct ar5523_cmd_31 {
 	__be32		magic2;
 };
 
-/* structure for command AR5523_CMD_SET_FILTER */
-struct ar5523_cmd_filter {
-	__be32		filter;
-	__be32		flags;
-};
+
+
+struct ar5523_cmd_rx_filter {		/* WDCMSG_RX_FILTER */
+	__be32	bits;
+#define UATH_FILTER_RX_UCAST		0x00000001
+#define UATH_FILTER_RX_MCAST		0x00000002
+#define UATH_FILTER_RX_BCAST		0x00000004
+#define UATH_FILTER_RX_CONTROL		0x00000008
+#define UATH_FILTER_RX_BEACON		0x00000010	/* beacon frames */
+#define UATH_FILTER_RX_PROM		0x00000020	/* promiscuous mode */
+#define UATH_FILTER_RX_PHY_ERR		0x00000040	/* phy errors */
+#define UATH_FILTER_RX_PHY_RADAR	0x00000080	/* radar phy errors */
+#define UATH_FILTER_RX_XR_POOL		0x00000400	/* XR group polls */
+#define UATH_FILTER_RX_PROBE_REQ	0x00000800
+	__be32	op;
+#define UATH_FILTER_OP_INIT		0x0
+#define UATH_FILTER_OP_SET		0x1
+#define UATH_FILTER_OP_CLEAR		0x2
+#define UATH_FILTER_OP_TEMP		0x3
+#define UATH_FILTER_OP_RESTORE		0x4
+} __packed;
+
 
 /* structure for command AR5523_CMD_SET_BSSID */
 struct ar5523_cmd_bssid {
@@ -239,6 +383,126 @@ struct ar5523_cmd_bssid {
 	__be32		reserved2;
 	__be32		len;
 	__u8		bssid[AR5523_ADDR_LEN];
+};
+
+enum {
+	CFG_NONE,			/* Sentinal to indicate "no config" */
+	CFG_REG_DOMAIN,			/* Regulatory Domain */
+	CFG_RATE_CONTROL_ENABLE,
+	CFG_DEF_XMIT_DATA_RATE,		/* NB: if rate control is not enabled */
+	CFG_HW_TX_RETRIES,
+	CFG_SW_TX_RETRIES,
+	CFG_SLOW_CLOCK_ENABLE,
+	CFG_COMP_PROC,
+	CFG_USER_RTS_THRESHOLD,
+	CFG_XR2NORM_RATE_THRESHOLD,
+	CFG_XRMODE_SWITCH_COUNT,
+	CFG_PROTECTION_TYPE,
+	CFG_BURST_SEQ_THRESHOLD,
+	CFG_ABOLT,
+	CFG_IQ_LOG_COUNT_MAX,
+	CFG_MODE_CTS,
+	CFG_WME_ENABLED,
+	CFG_GPRS_CBR_PERIOD,
+	CFG_SERVICE_TYPE,
+	/* MAC Address to use.  Overrides EEPROM */
+	CFG_MAC_ADDR,
+	CFG_DEBUG_EAR,
+	CFG_INIT_REGS,
+	/* An ID for use in error & debug messages */
+	CFG_DEBUG_ID,
+	CFG_COMP_WIN_SZ,
+	CFG_DIVERSITY_CTL,
+	CFG_TP_SCALE,
+	CFG_TPC_HALF_DBM5,
+	CFG_TPC_HALF_DBM2,
+	CFG_OVERRD_TX_POWER,
+	CFG_USE_32KHZ_CLOCK,
+	CFG_GMODE_PROTECTION,
+	CFG_GMODE_PROTECT_RATE_INDEX,
+	CFG_GMODE_NON_ERP_PREAMBLE,
+	CFG_WDC_TRANSPORT_CHUNK_SIZE,
+};
+
+
+enum {
+	/* Sentinal to indicate "no capability" */
+	CAP_NONE,
+	CAP_ALL,			/* ALL capabilities */
+	CAP_TARGET_VERSION,
+	CAP_TARGET_REVISION,
+	CAP_MAC_VERSION,
+	CAP_MAC_REVISION,
+	CAP_PHY_REVISION,
+	CAP_ANALOG_5GHz_REVISION,
+	CAP_ANALOG_2GHz_REVISION,
+	/* Target supports WDC message debug features */
+	CAP_DEBUG_WDCMSG_SUPPORT,
+
+	CAP_REG_DOMAIN,
+	CAP_COUNTRY_CODE,
+	CAP_REG_CAP_BITS,
+
+	CAP_WIRELESS_MODES,
+	CAP_CHAN_SPREAD_SUPPORT,
+	CAP_SLEEP_AFTER_BEACON_BROKEN,
+	CAP_COMPRESS_SUPPORT,
+	CAP_BURST_SUPPORT,
+	CAP_FAST_FRAMES_SUPPORT,
+	CAP_CHAP_TUNING_SUPPORT,
+	CAP_TURBOG_SUPPORT,
+	CAP_TURBO_PRIME_SUPPORT,
+	CAP_DEVICE_TYPE,
+	CAP_XR_SUPPORT,
+	CAP_WME_SUPPORT,
+	CAP_TOTAL_QUEUES,
+	CAP_CONNECTION_ID_MAX,		/* Should absorb CAP_KEY_CACHE_SIZE */
+
+	CAP_LOW_5GHZ_CHAN,
+	CAP_HIGH_5GHZ_CHAN,
+	CAP_LOW_2GHZ_CHAN,
+	CAP_HIGH_2GHZ_CHAN,
+
+	CAP_MIC_AES_CCM,
+	CAP_MIC_CKIP,
+	CAP_MIC_TKIP,
+	CAP_MIC_TKIP_WME,
+	CAP_CIPHER_AES_CCM,
+	CAP_CIPHER_CKIP,
+	CAP_CIPHER_TKIP,
+
+	CAP_TWICE_ANTENNAGAIN_5G,
+	CAP_TWICE_ANTENNAGAIN_2G,
+};
+
+
+enum {
+	ST_NONE,                    /* Sentinal to indicate "no status" */
+	ST_ALL,
+	ST_SERVICE_TYPE,
+	ST_WLAN_MODE,
+	ST_FREQ,
+	ST_BAND,
+	ST_LAST_RSSI,
+	ST_PS_FRAMES_DROPPED,
+	ST_CACHED_DEF_ANT,
+	ST_COUNT_OTHER_RX_ANT,
+	ST_USE_FAST_DIVERSITY,
+	ST_MAC_ADDR,
+	ST_RX_GENERATION_NUM,
+	ST_TX_QUEUE_DEPTH,
+	ST_SERIAL_NUMBER,
+	ST_WDC_TRANSPORT_CHUNK_SIZE,
+};
+
+
+enum {
+	TARGET_DEVICE_AWAKE,
+	TARGET_DEVICE_SLEEP,
+	TARGET_DEVICE_PWRDN,
+	TARGET_DEVICE_PWRSAVE,
+	TARGET_DEVICE_SUSPEND,
+	TARGET_DEVICE_RESUME,
 };
 
 

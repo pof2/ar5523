@@ -76,8 +76,7 @@ enum {
 };
 
 enum {
-	AR5523_TX_CMD_COUNT	= 30,
-	AR5523_RX_CMD_COUNT	= 30,
+	AR5523_TX_CMD_COUNT	= 2,
 
 	AR5523_TX_DATA_COUNT	= 16,
 	AR5523_RX_DATA_COUNT	= 128,
@@ -87,9 +86,12 @@ struct ar5523_tx_cmd {
 	struct	list_head	list;
 	int			id;
         struct ar5523		*ar;
-	struct urb		*urb;
-	void			*buf;
+	struct urb		*urb_tx;
+	struct urb		*urb_rx;
+	void			*buf_tx;
+	void			*buf_rx;
 	void			*odata;
+	int			olen;
 	int			flags;
 	struct completion	done;
 };
@@ -115,7 +117,6 @@ struct ar5523 {
 	struct ieee80211_hw	*hw;
 
 	struct ar5523_tx_cmd	tx_cmd[AR5523_TX_CMD_COUNT];
-	struct ar5523_rx_cmd	rx_cmd[AR5523_RX_CMD_COUNT];
 	wait_queue_head_t	tx_cmd_wait;
 	spinlock_t		tx_cmd_list_lock;
 	struct	list_head	tx_cmd_free;
@@ -154,46 +155,140 @@ enum {
 };
 
 #define ar5523_dbg(ar, format, arg...)            \
-	dev_dbg(&(ar)->dev->dev, format, ## arg)
+	dev_err(&(ar)->dev->dev, format, ## arg)
 #define ar5523_err(ar, format, arg...)            \
 	dev_err(&(ar)->dev->dev, format, ## arg)
 #define ar5523_info(ar, format, arg...)            \
-	dev_info(&(ar)->dev->dev, format, ## arg)
+	dev_err(&(ar)->dev->dev, format, ## arg)
+
+
 
 
 /*
- * Low-level functions to send read or write commands to the firmware.
+ * TX/RX command handling.
+ */
+static void ar5523_read_reply(struct ar5523 *ar, struct ar5523_cmd_hdr *hdr,
+			       struct ar5523_tx_cmd *cmd)
+{
+	int dlen, olen;
+	u32 *rp;
+
+	hdr->code = be32_to_cpu(hdr->code);
+	hdr->len = be32_to_cpu(hdr->len);
+	hdr->magic = be32_to_cpu(hdr->magic);	/* target status on return */
+
+	dlen = hdr->len - sizeof(*hdr);
+
+	if (dlen < 0) {
+		WARN_ON(1);
+		goto out;
+	}
+
+	ar5523_dbg(ar, "Code = %d len = %d\n", hdr->code & 0xff, dlen);
+
+	rp = (u32 *)(hdr+1);
+	if (dlen >= sizeof(u32)) {
+		olen = be32_to_cpu(rp[0]);
+		dlen -= sizeof(u32);
+		if (olen == 0) {
+			/* convention is 0 =>'s one word */
+			olen = sizeof(u32);
+		}
+	} else
+		olen = 0;
+
+	if (cmd->odata) {
+		if (cmd->olen < olen)
+			WARN_ON(1);
+		else
+			memcpy(cmd->odata, &rp[1], olen);
+	}
+
+out:
+	complete(&cmd->done);
+}
+
+static void free_tx_cmd(struct ar5523 *ar, struct ar5523_tx_cmd *cmd)
+{
+	unsigned long irqflags;
+
+	ar5523_dbg(ar, "return tx cmd %d\n", cmd->id);
+
+	spin_lock_irqsave(&ar->tx_cmd_list_lock, irqflags);
+	list_move(&cmd->list, &ar->tx_cmd_free);
+	spin_unlock_irqrestore(&ar->tx_cmd_list_lock, irqflags);
+}
+
+
+static void ar5523_cmd_rx_cb(struct urb *urb)
+{
+	struct ar5523_tx_cmd *cmd = urb->context;
+	struct ar5523_cmd_hdr *hdr = cmd->buf_rx;
+	struct ar5523 *ar = cmd->ar;
+
+	free_tx_cmd(ar, cmd);
+
+	/* sync/async unlink faults aren't errors */
+	if (urb->status && (urb->status != -ENOENT &&
+	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
+		ar5523_dbg(ar,
+			   "nonzero write bulk status received: %d\n",
+			   urb->status);
+		return;
+	}
+
+	if (urb->status) {
+		ar5523_err(ar, "RX USB error %d.\n", urb->status);
+		return;
+	}
+
+	if (urb->actual_length < sizeof(struct ar5523_cmd_hdr)) {
+		ar5523_err(ar, "RX USB to short.\n");
+		return;
+	}
+
+	ar5523_dbg(ar, "%s code %02x priv %d\n", __func__, be32_to_cpu(hdr->code) & 0xff, hdr->priv);
+
+	switch (be32_to_cpu(hdr->code) & 0xff) {
+	default:
+		/* reply to a read command */
+		ar5523_read_reply(ar, hdr, cmd);
+		break;
+	}
+}
+
+/*
+ * Command submitted cb
  */
 static void ar5523_cmd_tx_cb(struct urb *urb)
 {
 	struct ar5523_tx_cmd *cmd = urb->context;
-	struct ar5523_cmd_hdr *hdr = cmd->buf;
+	struct ar5523_cmd_hdr *hdr = cmd->buf_tx;
 	struct ar5523 *ar = cmd->ar;
-	unsigned long flags;
 
-	ar5523_dbg(ar, "tx urb %d completed\n", hdr->priv);
+	ar5523_dbg(ar, "cmd tx urb %d completed. Status =%d\n", hdr->priv, urb->status);
 
-	spin_lock_irqsave(&ar->tx_cmd_list_lock, flags);
-	list_move(&cmd->list, &ar->tx_cmd_free);
-	spin_unlock_irqrestore(&ar->tx_cmd_list_lock, flags);
+	if (urb->status) {
+		ar5523_err(ar, "Failed to TX command\n");
+	}
 
-	/*
-	 * No ones is waiting for async write commands and read commands
-	 * get completed by ar5523_cmd_rx_cb.
-	 */
-	if ((cmd->flags & (AR5523_CMD_FLAG_READ|AR5523_CMD_FLAG_ASYNC)) == 0)
-		complete(&cmd->done);
-	wake_up(&ar->tx_cmd_wait);
+	if (!(cmd->flags & AR5523_CMD_FLAG_READ)) {
+		printk("Free cmd in tx cb\n");
+		free_tx_cmd(ar, cmd);
+	}
+
 }
 
 static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
-		int ilen, void *odata, int flags)
+		int ilen, void *odata, int olen, int flags)
 {
 	struct ar5523_cmd_hdr *hdr;
 	struct ar5523_tx_cmd *cmd = NULL;
 	int xferlen, error;
 	unsigned long irqflags;
 
+
+	
 	do {
 		spin_lock_irqsave(&ar->tx_cmd_list_lock, irqflags);
 		if (!list_empty(&ar->tx_cmd_free)) {
@@ -203,39 +298,55 @@ static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
 		spin_unlock_irqrestore(&ar->tx_cmd_list_lock, irqflags);
 		if (!cmd) {
 			ar5523_info(ar, "No free tx cmd available. Sleep\n");
+			msleep(3000);
 			wait_event(ar->tx_cmd_wait, 1);
 		}
 	} while(!cmd);
 
+
 	/* always bulk-out a multiple of 4 bytes */
 	xferlen = (sizeof(struct ar5523_cmd_hdr) + ilen + 3) & ~3;
 
-	hdr = (struct ar5523_cmd_hdr *)cmd->buf;
+	hdr = (struct ar5523_cmd_hdr *)cmd->buf_tx;
 	memset(hdr, 0, sizeof(struct ar5523_cmd_hdr));
 	hdr->len   = cpu_to_be32(xferlen);
 	hdr->code  = cpu_to_be32(code);
 	hdr->priv  = cmd->id;	/* don't care about endianness */
+
 	if (flags & AR5523_CMD_FLAG_MAGIC)
 		hdr->magic = cpu_to_be32(1 << 24);
 	memcpy(hdr + 1, idata, ilen);
 
 	cmd->odata = odata;
+	cmd->olen = olen;
 	cmd->flags = flags;
 
-	usb_fill_bulk_urb(cmd->urb, ar->dev, ar5523_cmd_tx_pipe(ar->dev),
-			  cmd->buf, xferlen, ar5523_cmd_tx_cb, cmd);
-	cmd->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+	usb_fill_bulk_urb(cmd->urb_tx, ar->dev, ar5523_cmd_tx_pipe(ar->dev),
+			  cmd->buf_tx, xferlen, ar5523_cmd_tx_cb, cmd);
+	cmd->urb_tx->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 
-	error = usb_submit_urb(cmd->urb, GFP_KERNEL);
+	error = usb_submit_urb(cmd->urb_tx, GFP_KERNEL);
 	if (error) {
 		ar5523_err(ar, "could not send command 0x%x, error=%d\n",
 			       code, error);
 		return error;
 	}
+	printk("Submitted cmd %02x id=%d\n", hdr->code, hdr->priv);
 
-	/* wait at most two seconds for command reply */
-	if ((flags & AR5523_CMD_FLAG_READ) ||
-	    !(flags & AR5523_CMD_FLAG_ASYNC)) {
+	if (flags & AR5523_CMD_FLAG_READ) {
+		ar5523_dbg(ar, "Read CMD. Submit RX urb %p %p\n", cmd, ar);
+		usb_fill_bulk_urb(cmd->urb_rx, ar->dev,
+				  ar5523_cmd_rx_pipe(ar->dev), cmd->buf_rx,
+				  AR5523_MAX_RXCMDSZ, ar5523_cmd_rx_cb, cmd);
+		cmd->urb_rx->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+
+		error = usb_submit_urb(cmd->urb_rx, GFP_KERNEL);
+		if (error) {
+			ar5523_err(ar, "error %d when submitting rx urb\n",
+				       error);
+			return error;
+		}
+
 		if (!wait_for_completion_timeout(&cmd->done, 2 * HZ)) {
 			cmd->odata = NULL;
 			ar5523_err(ar, "timeout waiting for command "
@@ -251,15 +362,17 @@ static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
 static int ar5523_cmd_write(struct ar5523 *ar, u32 code, const void *data,
 		int len, int flags)
 {
+	printk("Write cmd %02x\n", code);
 	flags &= ~AR5523_CMD_FLAG_READ; 
-	return ar5523_cmd(ar, code, data, len, NULL, flags);
+	return ar5523_cmd(ar, code, data, len, NULL, 0, flags);
 }
 
 static int ar5523_cmd_read(struct ar5523 *ar, u32 code, const void *idata,
-		int ilen, void *odata, int flags)
+		int ilen, void *odata, int olen, int flags)
 {
+	printk("Read cmd %02x\n", code);
 	flags |= AR5523_CMD_FLAG_READ;
-	return ar5523_cmd(ar, code, idata, ilen, odata, flags);
+	return ar5523_cmd(ar, code, idata, ilen, odata, olen, flags);
 }
 
 static int ar5523_write_reg(struct ar5523 *ar, u32 reg, u32 val)
@@ -275,6 +388,45 @@ static int ar5523_write_reg(struct ar5523 *ar, u32 reg, u32 val)
 				 3 * sizeof(__be32), 0);
 	if (error)
 		ar5523_err(ar, "could not write register 0x%02x\n", reg);
+	return error;
+}
+
+static int
+ar5523_config(struct ar5523 *ar, u32 reg, u32 val)
+{
+	struct ar5523_write_mac write;
+	int error;
+
+	write.reg = cpu_to_be32(reg);
+	write.len = cpu_to_be32(0);	/* 0 = single write */
+	*(u32 *)write.data = cpu_to_be32(val);
+
+	error = ar5523_cmd_write(ar, WDCMSG_TARGET_SET_CONFIG, &write,
+	    3 * sizeof (u32), 0);
+	if (error != 0) {
+		ar5523_err(ar, "could not write register 0x%02x\n", reg);
+	}
+	return error;
+}
+
+
+static int
+ar5523_config_multi(struct ar5523 *ar, u32 reg, const void *data, int len)
+{
+	struct ar5523_write_mac write;
+	int error;
+
+	write.reg = cpu_to_be32(reg);
+	write.len = cpu_to_be32(len);
+	memcpy(write.data, data, len);
+
+	/* properly handle the case where len is zero (reset) */
+	error = ar5523_cmd_write(ar, WDCMSG_TARGET_SET_CONFIG, &write,
+	    (len == 0) ? sizeof (u32) : 2 * sizeof (u32) + len, 0);
+	if (error != 0) {
+		ar5523_err(ar, "could not write %d bytes to register 0x%02x\n",
+			   len, reg);
+	}
 	return error;
 }
 
@@ -300,6 +452,7 @@ static int ar5523_write_multi(struct ar5523 *ar, u32 reg,
 	return error;
 }
 
+#if 0
 static int ar5523_read_reg(struct ar5523 *ar, u32 reg, u32 *val)
 {
 	struct ar5523_read_mac read;
@@ -307,7 +460,7 @@ static int ar5523_read_reg(struct ar5523 *ar, u32 reg, u32 *val)
 	int error;
 
 	error = ar5523_cmd_read(ar, AR5523_CMD_READ_MAC, &bereg,
-				sizeof(reg), &read, 0);
+				sizeof(reg), &read, sizeof(read), 0);
 	if (error) {
 		ar5523_err(ar, "could not read register 0x%02x\n", reg);
 		return error;
@@ -316,6 +469,99 @@ static int ar5523_read_reg(struct ar5523 *ar, u32 reg, u32 *val)
 	*val = be32_to_cpu(*(__be32 *)read.data);
 	return error;
 }
+#endif
+
+
+static int
+ar5523_get_status(struct ar5523 *ar, u32 which, void *odata, int olen)
+{
+	int error;
+
+	which = cpu_to_be32(which);
+	error = ar5523_cmd_read(ar, WDCMSG_TARGET_GET_STATUS,
+	    &which, sizeof(which), odata, olen, AR5523_CMD_FLAG_MAGIC);
+	if (error != 0)
+		ar5523_err(ar, "could not read EEPROM offset 0x%02x\n", be32_to_cpu(which));
+	return error;
+}
+
+static int
+ar5523_get_capability(struct ar5523 *ar, u32 cap, u32 *val)
+{
+	int error;
+
+	cap = cpu_to_be32(cap);
+	error = ar5523_cmd_read(ar, WDCMSG_TARGET_GET_CAPABILITY,
+	    &cap, sizeof cap, val, sizeof(u32), AR5523_CMD_FLAG_MAGIC);
+	if (error != 0) {
+		ar5523_err(ar, "could not read capability %u\n",
+		    be32_to_cpu(cap));
+		return (error);
+	}
+	*val = be32_to_cpu(*val);
+	return (error);
+}
+
+
+static int
+ar5523_get_devcap(struct ar5523 *ar)
+{
+#define	GETCAP(x, v) do {				\
+	error = ar5523_get_capability(ar, x, &cap);		\
+	if (error != 0)					\
+		return (error);				\
+	printk("Cap: "			\
+	    "%s: %s=0x%08x\n", __func__, #x, cap);	\
+} while (0)
+	int error;
+	u32 cap;
+
+	/* collect device capabilities */
+	GETCAP(CAP_TARGET_VERSION, cap->targetVersion);
+	GETCAP(CAP_TARGET_REVISION, cap->targetRevision);
+	GETCAP(CAP_MAC_VERSION, cap->macVersion);
+	GETCAP(CAP_MAC_REVISION, cap->macRevision);
+	GETCAP(CAP_PHY_REVISION, cap->phyRevision);
+	GETCAP(CAP_ANALOG_5GHz_REVISION, cap->analog5GhzRevision);
+	GETCAP(CAP_ANALOG_2GHz_REVISION, cap->analog2GhzRevision);
+
+	GETCAP(CAP_REG_DOMAIN, cap->regDomain);
+	GETCAP(CAP_REG_CAP_BITS, cap->regCapBits);
+#if 0
+	/* NB: not supported in rev 1.5 */
+	GETCAP(CAP_COUNTRY_CODE, cap->countryCode);
+#endif
+	GETCAP(CAP_WIRELESS_MODES, cap->wirelessModes);
+	GETCAP(CAP_CHAN_SPREAD_SUPPORT, cap->chanSpreadSupport);
+	GETCAP(CAP_COMPRESS_SUPPORT, cap->compressSupport);
+	GETCAP(CAP_BURST_SUPPORT, cap->burstSupport);
+	GETCAP(CAP_FAST_FRAMES_SUPPORT, cap->fastFramesSupport);
+	GETCAP(CAP_CHAP_TUNING_SUPPORT, cap->chapTuningSupport);
+	GETCAP(CAP_TURBOG_SUPPORT, cap->turboGSupport);
+	GETCAP(CAP_TURBO_PRIME_SUPPORT, cap->turboPrimeSupport);
+	GETCAP(CAP_DEVICE_TYPE, cap->deviceType);
+	GETCAP(CAP_WME_SUPPORT, cap->wmeSupport);
+	GETCAP(CAP_TOTAL_QUEUES, cap->numTxQueues);
+	GETCAP(CAP_CONNECTION_ID_MAX, cap->connectionIdMax);
+
+	GETCAP(CAP_LOW_5GHZ_CHAN, cap->low5GhzChan);
+	GETCAP(CAP_HIGH_5GHZ_CHAN, cap->high5GhzChan);
+	GETCAP(CAP_LOW_2GHZ_CHAN, cap->low2GhzChan);
+	GETCAP(CAP_HIGH_2GHZ_CHAN, cap->high2GhzChan);
+	GETCAP(CAP_TWICE_ANTENNAGAIN_5G, cap->twiceAntennaGain5G);
+	GETCAP(CAP_TWICE_ANTENNAGAIN_2G, cap->twiceAntennaGain2G);
+
+	GETCAP(CAP_CIPHER_AES_CCM, cap->supportCipherAES_CCM);
+	GETCAP(CAP_CIPHER_TKIP, cap->supportCipherTKIP);
+	GETCAP(CAP_MIC_TKIP, cap->supportMicTKIP);
+
+//	cap->supportCipherWEP = 1;	/* NB: always available */
+
+	return (0);
+}
+
+
+#if 0
 
 static int ar5523_read_eeprom(struct ar5523 *ar, u32 reg, void *odata) 
 {
@@ -324,16 +570,19 @@ static int ar5523_read_eeprom(struct ar5523 *ar, u32 reg, void *odata)
 	int error;
 
 	error = ar5523_cmd_read(ar, AR5523_CMD_READ_EEPROM, &bereg,
-				sizeof(bereg), &read, 0);
+				sizeof(bereg), &read, sizeof(read), 0);
 	if (error) {
 		ar5523_err(ar, "could not read EEPROM offset 0x%02x\n", reg);
 		return error;
 	}
 
-	memcpy(odata, read.data,
-		read.len ? be32_to_cpu(read.len) : sizeof(__be32));
+	printk("About to copy %d bytes\n", read.len);
+
+//	memcpy(odata, read.data,
+//		read.len ? be32_to_cpu(read.len) : sizeof(__be32));
 	return error;
 }
+#endif
 
 /*
  * Helpers.
@@ -382,17 +631,17 @@ static int ar5523_set_xled(struct ar5523 *ar, int which)
 				&xled, sizeof(xled), 0);
 }
 
-static int ar5523_set_rxfilter(struct ar5523 *ar, u32 filter, u32 flags)
+
+static int ar5523_set_rxfilter(struct ar5523 *ar, u32 bits, u32 op)
 {
-	struct ar5523_cmd_filter rxfilter;
+	struct ar5523_cmd_rx_filter rxfilter;
 
-	rxfilter.filter = cpu_to_be32(filter);
-	rxfilter.flags  = cpu_to_be32(flags);
+	rxfilter.bits = cpu_to_be32(bits);
+	rxfilter.op = cpu_to_be32(op);
 
-	ar5523_dbg(ar, "setting Rx filter=0x%x flags=0x%x\n", filter, flags);
-
-	return ar5523_cmd_write(ar, AR5523_CMD_SET_FILTER,
-				&rxfilter, sizeof(rxfilter), 0);
+	ar5523_dbg(ar, "setting Rx filter=0x%x flags=0x%x\n", bits, op);
+	return ar5523_cmd_write(ar, WDCMSG_RX_FILTER, &rxfilter,
+	    sizeof rxfilter, 0);
 }
 
 static int ar5523_reset_tx_queues(struct ar5523 *ar)
@@ -501,39 +750,6 @@ static int ar5523_tx_null(struct ar5523 *ar)
  out:
 	kfree(p);
 	return error;
-}
-
-static int ar5523_set_rates(struct ar5523 *ar,
-			    struct ieee80211_vif *vif,
-			    struct ieee80211_bss_conf *bss_conf)
-{
-	struct ar5523_cmd_rates rates;
-	struct ieee80211_supported_band *band;
-	struct ieee80211_sta *sta;
-	int bit, i = 0;
-	u32 sta_rate_set;
-
-	sta = ieee80211_find_sta(vif, bss_conf->bssid);
-	if (!sta) {
-		ar5523_info(ar, "STA not found. Cannot set rates\n");
-		return -1;
-	}
-	sta_rate_set = sta->supp_rates[ar->hw->conf.channel->band];
-	ar5523_dbg(ar, "sta rate_set = %08x\n", sta_rate_set);
-
-	memset(&rates, 0, sizeof(rates));
-	rates.magic1 = cpu_to_be32(0x02);
-
-	band = ar->hw->wiphy->bands[ar->hw->conf.channel->band];
-	for (bit = 0; bit < band->n_bitrates; bit++) {
-		if (sta_rate_set & 1)
-			rates.rates[i++] = band->bitrates[bit].hw_value;
-		sta_rate_set >>= 1;
-	}
-
-	rates.nrates = i;
-	return ar5523_cmd_write(ar, AR5523_CMD_SET_RATES,
-				&rates, sizeof(rates), 0);
 }
 
 static void ar5523_data_rx_cb(struct urb *urb)
@@ -690,11 +906,80 @@ static int ar5523_alloc_rx_bufs(struct ar5523 *ar)
 static int ar5523_start(struct ieee80211_hw *hw)
 {
 	struct ar5523 *ar = hw->priv;
-	struct ar5523_cmd_31 cmd31;
 	int error;
 	__be32 val;
 
 	ar5523_dbg(ar, "start called\n");
+
+	val = cpu_to_be32(0);
+	ar5523_cmd_write(ar, WDCMSG_BIND, &val, sizeof val, 0);
+
+	/* set MAC address */
+	ar5523_config_multi(ar, CFG_MAC_ADDR, &ar->hw->wiphy->perm_addr,
+			    ETH_ALEN);
+
+	/* XXX honor net80211 state */
+	ar5523_config(ar, CFG_RATE_CONTROL_ENABLE, 0x00000001);
+	ar5523_config(ar, CFG_DIVERSITY_CTL, 0x00000001);
+	ar5523_config(ar, CFG_ABOLT, 0x0000003f);
+	ar5523_config(ar, CFG_WME_ENABLED, 0x00000001);
+
+	ar5523_config(ar, CFG_SERVICE_TYPE, 1);
+	ar5523_config(ar, CFG_TP_SCALE, 0x00000000);
+	ar5523_config(ar, CFG_TPC_HALF_DBM5, 0x0000003c);
+	ar5523_config(ar, CFG_TPC_HALF_DBM2, 0x0000003c);
+	ar5523_config(ar, CFG_OVERRD_TX_POWER, 0x00000000);
+	ar5523_config(ar, CFG_GMODE_PROTECTION, 0x00000000);
+	ar5523_config(ar, CFG_GMODE_PROTECT_RATE_INDEX, 0x00000003);
+	ar5523_config(ar, CFG_PROTECTION_TYPE, 0x00000000);
+	ar5523_config(ar, CFG_MODE_CTS, 0x00000002);
+
+	error = ar5523_cmd_read(ar, WDCMSG_TARGET_START, NULL, 0,
+	    &val, sizeof(val), AR5523_CMD_FLAG_MAGIC);
+	if (error) {
+		ar5523_dbg(ar, "could not start target, error %d\n", error);
+		goto err;
+	}
+	ar5523_dbg(ar, "%s returns handle: 0x%x\n",
+	    "WDCMSG_TARGET_START", be32_to_cpu(val));
+
+
+#if 0
+	/* set default channel */
+	error = ar5523_switch_channel(ar, ic->ic_curchan);
+	if (error) {
+		ar5523_err(ar,
+		    "could not switch channel, error %d\n", error);
+		goto fail;
+	}
+#endif
+
+	val = cpu_to_be32(TARGET_DEVICE_AWAKE);
+	ar5523_cmd_write(ar, WDCMSG_SET_PWR_MODE, &val, sizeof val, 0);
+	/* XXX? check */
+	ar5523_cmd_write(ar, WDCMSG_RESET_KEY_CACHE, NULL, 0, 0);
+
+	/* enable Rx */
+	ar5523_set_rxfilter(ar, 0x0, UATH_FILTER_OP_INIT);
+	ar5523_set_rxfilter(ar,
+	    UATH_FILTER_RX_UCAST | UATH_FILTER_RX_MCAST |
+	    UATH_FILTER_RX_BCAST | UATH_FILTER_RX_BEACON,
+	    UATH_FILTER_OP_SET);
+
+
+	return -4;
+
+err:
+	return error;
+
+
+
+#if 0
+
+
+
+#
+	return -1;
 
 	val = 0;
 	ar5523_cmd_write(ar, AR5523_CMD_02, &val, sizeof(val), 0);
@@ -712,7 +997,7 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	if (error)
 		goto out;
 
-	error = ar5523_cmd_read(ar, AR5523_CMD_07, NULL, 0, &val,
+	error = ar5523_cmd_read(ar, AR5523_CMD_07, NULL, 0, &val, sizeof(val),
 				AR5523_CMD_FLAG_MAGIC);
 	if (error) {
 		ar5523_err(ar, "could not send read command 07h\n");
@@ -738,9 +1023,9 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	ar5523_write_reg(ar, 0x0f, 0x00000002);
 	ar5523_write_reg(ar, 0x0a, 0x00000007);     /* XXX retry? */
 
-	val = cpu_to_be32(4);
-	ar5523_cmd_write(ar, AR5523_CMD_27, &val, sizeof(val), 0);
-	ar5523_cmd_write(ar, AR5523_CMD_27, &val, sizeof(val), 0);
+//	val = cpu_to_be32(4);
+//	ar5523_cmd_write(ar, AR5523_CMD_27, &val, sizeof(val), 0);
+//	ar5523_cmd_write(ar, AR5523_CMD_27, &val, sizeof(val), 0);
 	ar5523_cmd_write(ar, AR5523_CMD_1B, NULL, 0, 0);
 
 	/* enable Rx */
@@ -757,6 +1042,7 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	ar5523_free_rx_bufs(ar);
  out:
  	return error;
+#endif
 }
 
 static void ar5523_stop(struct ieee80211_hw *hw)
@@ -836,6 +1122,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	if (atomic_read(&ar->tx_data_queued) >= AR5523_TX_DATA_COUNT) {
 		ar5523_dbg(ar, "tx queue full\n");
+		printk("tx queue full\n");
 		return;
 	}
 
@@ -926,7 +1213,7 @@ static void ar5523_remove_interface(struct ieee80211_hw *hw,
 	ar->mode = NL80211_IFTYPE_MONITOR;
 }
 
-static int ar5523_config(struct ieee80211_hw *hw, u32 changed)
+static int ar5523_hwconfig(struct ieee80211_hw *hw, u32 changed)
 {
 	struct ar5523 *ar = hw->priv;
 	struct ieee80211_conf *conf = &hw->conf;
@@ -973,16 +1260,109 @@ static int ar5523_config(struct ieee80211_hw *hw, u32 changed)
 	return 0;
 }
 
+static void ar5523_create_rateset(struct ar5523 *ar,
+				  struct ieee80211_vif *vif,
+				  struct ieee80211_bss_conf *bss_conf,
+				  struct ar5523_cmd_rateset *rs,
+				  bool basic)
+{
+	struct ieee80211_supported_band *band;
+	struct ieee80211_sta *sta;
+	int bit, i = 0;
+	u32 sta_rate_set;
+
+
+
+	if (basic)
+		sta_rate_set = bss_conf->basic_rates;
+	else {
+		sta = ieee80211_find_sta(vif, bss_conf->bssid);
+		if (!sta) {
+			ar5523_info(ar, "STA not found. Cannot set rates\n");
+			sta_rate_set = bss_conf->basic_rates;
+		}
+		sta_rate_set = sta->supp_rates[ar->hw->conf.channel->band];
+	}
+
+	ar5523_dbg(ar, "sta rate_set = %08x\n", sta_rate_set);
+
+	band = ar->hw->wiphy->bands[ar->hw->conf.channel->band];
+	for (bit = 0; bit < band->n_bitrates; bit++) {
+		BUG_ON(i >= AR5523_MAX_NRATES);
+		printk("Considering rate %d : %d\n", band->bitrates[bit].hw_value, sta_rate_set & 1);
+		if (sta_rate_set & 1)
+			rs->set[i++] = band->bitrates[bit].hw_value;
+		sta_rate_set >>= 1;
+	}
+
+	rs->length = i;
+}
+
+static int ar5523_set_basic_rates(struct ar5523 *ar,
+			    struct ieee80211_vif *vif,
+			    struct ieee80211_bss_conf *bss)
+{
+	struct ar5523_cmd_rates rates;
+
+	memset(&rates, 0, sizeof(rates));
+	rates.connid = cpu_to_be32(2);		/* XXX */
+	rates.size   = cpu_to_be32(sizeof(struct ar5523_cmd_rateset));
+	ar5523_create_rateset(ar, vif, bss, &rates.rateset, true);
+
+	return ar5523_cmd_write(ar, AR5523_CMD_SET_BASIC_RATES,
+	    &rates, sizeof rates, 0);
+}
+
+
+static int
+ar5523_create_connection(struct ar5523 *ar, struct ieee80211_vif *vif,
+			 struct ieee80211_bss_conf *bss)
+{
+	struct ar5523_cmd_create_connection create;
+
+	memset(&create, 0, sizeof(create));
+	create.connid = cpu_to_be32(2);
+	create.bssid = cpu_to_be32(0);
+	/* XXX packed or not?  */
+	create.size = cpu_to_be32(sizeof(struct ar5523_cmd_rateset));
+
+	ar5523_create_rateset(ar, vif, bss, &create.connattr.rateset, false);
+
+	if (1)
+		create.connattr.wlanmode = cpu_to_be32(WLAN_MODE_11g);
+	else
+		create.connattr.wlanmode = cpu_to_be32(WLAN_MODE_11b);
+
+	return ar5523_cmd_write(ar, AR5523_CREATE_CONNECTION, &create,
+	    sizeof create, 0);
+
+}
+
+static int
+ar5523_write_associd(struct ar5523 *ar, struct ieee80211_bss_conf *bss)
+{
+	struct ar5523_cmd_set_associd associd;
+
+	memset(&associd, 0, sizeof(associd));
+	associd.defaultrateix = cpu_to_be32(1);	/* XXX */
+	associd.associd = cpu_to_be32(bss->aid);
+	associd.timoffset = cpu_to_be32(0x3b);	/* XXX */
+	memcpy(associd.bssid, bss->bssid, ETH_ALEN);
+	return ar5523_cmd_write(ar, AR5523_WRITE_ASSOCID, &associd,
+	    sizeof associd, 0);
+}
+
+
+
 static void ar5523_bss_info_changed(struct ieee80211_hw *hw,
 		struct ieee80211_vif *vif,
-		struct ieee80211_bss_conf *ifconf,
+		struct ieee80211_bss_conf *bss,
 		u32 changed)
 {
 	struct ar5523 *ar = hw->priv;
-	struct ar5523_cmd_bssid bssid;
-	struct ar5523_cmd_0b cmd0b;
-	struct ar5523_cmd_0c cmd0c;
-	__be32 val;
+//	struct ar5523_cmd_bssid bssid;
+//	struct ar5523_cmd_0b cmd0b;
+//	__be32 val;
 	int error;
 
 	ar5523_dbg(ar, "bss_info_changed called\n");
@@ -992,11 +1372,41 @@ static void ar5523_bss_info_changed(struct ieee80211_hw *hw,
 	if (!(changed & BSS_CHANGED_ASSOC))
 		return;
 
-	memset(&bssid, 0, sizeof(bssid));
-	bssid.len = cpu_to_be32(AR5523_ADDR_LEN);
-	memcpy(&bssid.bssid, &ifconf->bssid, AR5523_ADDR_LEN);
-	ar5523_cmd_write(ar, AR5523_CMD_SET_BSSID, &bssid, sizeof(bssid), 0);
+	if (bss->assoc) {
+		error = ar5523_create_connection(ar, vif, bss);
+		if (error) {
+			ar5523_err(ar, "could not create connection\n");
+			return;
+		}
 
+		error = ar5523_set_basic_rates(ar, vif, bss);
+		if (error) {
+			ar5523_err(ar, "could not set negotiated rate set\n");
+			return;
+		}
+
+		error = ar5523_write_associd(ar, bss);	
+		if (error) {
+			ar5523_err(ar, "could not set association\n");
+			return;
+		}
+
+
+		/* turn link LED on */
+		ar5523_set_led(ar, AR5523_LED_LINK, 1);
+
+		/* make activity LED blink */
+		ar5523_set_xled(ar, 1);
+
+		/* start statistics timer */
+//		mod_timer(&ar->stat_timer, jiffies + HZ);
+
+	}
+	else {
+		ar5523_set_led(ar, AR5523_LED_LINK, 0);
+		ar5523_set_led(ar, AR5523_LED_ACTIVITY, 0);
+	}
+#if 0
 	memset(&cmd0b, 0, sizeof(cmd0b));
 	cmd0b.code = cpu_to_be32(2);
 	cmd0b.size = cpu_to_be32(sizeof (cmd0b.data));
@@ -1006,15 +1416,12 @@ static void ar5523_bss_info_changed(struct ieee80211_hw *hw,
 	cmd0c.magic1 = cpu_to_be32(2);
 	cmd0c.magic2 = cpu_to_be32(7);
 	cmd0c.magic3 = cpu_to_be32(1);
-	ar5523_cmd_write(ar, AR5523_CMD_0C, &cmd0c, sizeof(cmd0c), 0);
-
-	error = ar5523_set_rates(ar, vif, ifconf);
-	if (error) {
-		ar5523_err(ar, "could not set negotiated rate set\n");
-		return;
-	}
+	ar5523_cmd_write(ar, 0x0c, &cmd0c, sizeof(cmd0c), 0);
+#endif
 
 
+
+#if 0
 	val = cpu_to_be32(1);
 	ar5523_cmd_write(ar, AR5523_CMD_2E, &val, sizeof(val), 0);
 
@@ -1024,19 +1431,8 @@ static void ar5523_bss_info_changed(struct ieee80211_hw *hw,
 	bssid.len    = cpu_to_be32(AR5523_ADDR_LEN);
 	memcpy(&bssid.bssid, &ifconf->bssid, AR5523_ADDR_LEN);
 	ar5523_cmd_write(ar, AR5523_CMD_SET_BSSID, &bssid, sizeof(bssid), 0);
+#endif
 
-	/* turn link LED on */
-	ar5523_set_led(ar, AR5523_LED_LINK, 1);
-
-	/* make activity LED blink */
-	ar5523_set_xled(ar, 1);
-
-	/* set state to associated */
-	val = cpu_to_be32(1);
-	ar5523_cmd_write(ar, AR5523_CMD_SET_STATE, &val, sizeof(val), 0);
-
-	/* start statistics timer */
-	mod_timer(&ar->stat_timer, jiffies + HZ);
 }
 
 static void ar5523_configure_filter(struct ieee80211_hw *hw,
@@ -1058,85 +1454,11 @@ static const struct ieee80211_ops ar5523_ops = {
 	.set_rts_threshold	= ar5523_set_rts_threshold,
 	.add_interface		= ar5523_add_interface,
 	.remove_interface	= ar5523_remove_interface,
-	.config			= ar5523_config,
+	.config			= ar5523_hwconfig,
 	.bss_info_changed	= ar5523_bss_info_changed,
 	.configure_filter	= ar5523_configure_filter,
 };
 
-/*
- * TX/RX command handling.
- */
-static void ar5523_read_reply(struct ar5523 *ar, struct ar5523_cmd_hdr *hdr)
-{
-	struct ar5523_tx_cmd *txcmd;
-
-	if (hdr->priv > AR5523_TX_CMD_COUNT) {
-		WARN_ON(1);
-		return;
-	}
-	
-	txcmd = &ar->tx_cmd[hdr->priv];
-
-	if (txcmd->odata) {
-		memcpy(txcmd->odata, hdr + 1,
-		       be32_to_cpu(hdr->len) - sizeof(struct ar5523_cmd_hdr));
-	}
-
-	complete(&txcmd->done);
-}
-
-static void ar5523_cmd_rx_cb(struct urb *urb)
-{
-	struct ar5523_rx_cmd *cmd = urb->context;
-	struct ar5523_cmd_hdr *hdr = cmd->buf;
-	struct ar5523 *ar = cmd->ar;
-	int error;
-
-	/* sync/async unlink faults aren't errors */
-	if (urb->status && (urb->status != -ENOENT &&
-	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
-		ar5523_dbg(ar,
-			   "nonzero write bulk status received: %d\n",
-			   urb->status);
-		goto resubmit;
-	}
-
-	if (urb->status) {
-		/* do not try to resubmit urb */
-		return;
-	}
-
-	switch (be32_to_cpu(hdr->code) & 0xff) {
-	default:
-		/* reply to a read command */
-		ar5523_read_reply(ar, hdr);
-		break;
-	case AR5523_NOTIF_READY:
-		ar5523_dbg(ar, "received device ready notification\n");
-		complete(&ar->ready);
-		break;
-	case AR5523_NOTIF_TX:
-		/* this notification is sent when AR5523_TX_NOTIFY is set */
-		ar5523_dbg(ar, "received Tx notification\n");
-		break;
-	case AR5523_NOTIF_STATS:
-		ar5523_dbg(ar, "received device statistics\n");
-		mod_timer(&ar->stat_timer, jiffies + HZ);
-		break;
-	}
-
-	/* re-submit the urb */
-	usb_fill_bulk_urb(cmd->urb, ar->dev, ar5523_cmd_rx_pipe(ar->dev),
-			  cmd->buf, AR5523_MAX_RXCMDSZ, ar5523_cmd_rx_cb, cmd);
-	urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
-
- resubmit:
-	error = usb_submit_urb(urb, GFP_ATOMIC);
-	if (error) {
-		/* XXX: handle */
-		ar5523_err(ar, "error %d when resubmitting rx urb\n", error);
-	}
-}
 
 static void ar5523_free_tx_cmds(struct ar5523 *ar)
 {
@@ -1146,10 +1468,14 @@ static void ar5523_free_tx_cmds(struct ar5523 *ar)
 		struct ar5523_tx_cmd *cmd = &ar->tx_cmd[i];
 
 		list_del(&cmd->list);
-		usb_kill_urb(cmd->urb);
+		usb_kill_urb(cmd->urb_rx);
+		usb_kill_urb(cmd->urb_tx);
 		usb_free_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
-				  cmd->buf, cmd->urb->transfer_dma);
-		usb_free_urb(cmd->urb);
+				  cmd->buf_rx, cmd->urb_rx->transfer_dma);
+		usb_free_coherent(ar->dev, AR5523_MAX_RXCMDSZ,
+				  cmd->buf_tx, cmd->urb_rx->transfer_dma);
+		usb_free_urb(cmd->urb_rx);
+		usb_free_urb(cmd->urb_tx);
 	}
 }
 
@@ -1163,21 +1489,25 @@ static int ar5523_alloc_tx_cmds(struct ar5523 *ar)
 
 		cmd->ar = ar;
 		cmd->id = i;
-		cmd->urb = usb_alloc_urb(0, GFP_KERNEL);
-		if (!cmd->urb) {
-			ar5523_err(ar, "could not allocate tx urb\n");
+		cmd->urb_rx = usb_alloc_urb(0, GFP_KERNEL);
+		cmd->urb_tx= usb_alloc_urb(0, GFP_KERNEL);
+		if (!cmd->urb_rx || !cmd->urb_tx) {
+			ar5523_err(ar, "could not allocate urb\n");
 			goto out;
 		}
-		cmd->buf = usb_alloc_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
+		cmd->buf_rx = usb_alloc_coherent(ar->dev, AR5523_MAX_RXCMDSZ,
 					      GFP_KERNEL,
-					    &cmd->urb->transfer_dma);
-		if (!cmd->buf) {
+					    &cmd->urb_rx->transfer_dma);
+		cmd->buf_tx = usb_alloc_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
+					      GFP_KERNEL,
+					    &cmd->urb_tx->transfer_dma);
+		if (!cmd->buf_rx ) { //TODO
 			ar5523_err(ar, "could not allocate tx buffer\n");
-			usb_free_urb(cmd->urb);
+			usb_free_urb(cmd->urb_rx);
 			goto out;
 		}
 		init_completion(&cmd->done);
-		list_add(&cmd->list, &ar->tx_cmd_free);
+		list_add_tail(&cmd->list, &ar->tx_cmd_free);
 	}
 	return 0;
 
@@ -1186,14 +1516,18 @@ static int ar5523_alloc_tx_cmds(struct ar5523 *ar)
 		struct ar5523_tx_cmd *cmd = &ar->tx_cmd[i];
 
 		usb_free_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
-				  cmd->buf, cmd->urb->transfer_dma);
-		usb_free_urb(cmd->urb);
+				  cmd->buf_tx, cmd->urb_tx->transfer_dma);
+		usb_free_coherent(ar->dev, AR5523_MAX_RXCMDSZ,
+				  cmd->buf_rx, cmd->urb_rx->transfer_dma);
+		usb_free_urb(cmd->urb_tx);
+		usb_free_urb(cmd->urb_rx);
 		list_del(&cmd->list);		
 	}
 
 	return error;
 }
 
+#if 0
 static void ar5523_free_rx_cmds(struct ar5523 *ar)
 {
 	int i;
@@ -1262,33 +1596,35 @@ static int ar5523_alloc_rx_cmds(struct ar5523 *ar)
 
 	return error;
 }
+#endif
+
+static int ar5523_host_available(struct ar5523 *ar)
+{
+	struct uath_cmd_host_available setup;
+
+	/* inform target the host is available */
+	setup.sw_ver_major = cpu_to_be32(ATH_SW_VER_MAJOR);
+	setup.sw_ver_minor = cpu_to_be32(ATH_SW_VER_MINOR);
+	setup.sw_ver_patch = cpu_to_be32(ATH_SW_VER_PATCH);
+	setup.sw_ver_build = cpu_to_be32(ATH_SW_VER_BUILD);
+	return ar5523_cmd_read(ar, WDCMSG_HOST_AVAILABLE,
+		&setup, sizeof setup, NULL, 0, 0);
+}
+
+
+#if 0
 
 /*
  * Device initialization and teardown.
  */
 static int ar5523_reset(struct ar5523 *ar)
 {
-        struct ar5523_cmd_setup setup;
+//        struct ar5523_cmd_setup setup;
 	u32 reg, val;
 	int error;
 
-	/* init device with some voodoo incantations.. */
-	setup.magic1 = cpu_to_be32(1);
-	setup.magic2 = cpu_to_be32(5);
-	setup.magic3 = cpu_to_be32(200);
-	setup.magic4 = cpu_to_be32(27);
+	error = ar5523_host_available(ar);
 
-	error = ar5523_cmd_write(ar, AR5523_CMD_SETUP, &setup, sizeof(setup),
-				 AR5523_CMD_FLAG_ASYNC);
-	if (error)
-		return error;
-
-	/* ..and wait until firmware notifies us that it is ready */
-	if (!wait_for_completion_timeout(&ar->ready, 5 * HZ)) {
-		ar5523_err(ar,
-			"failed to reset device - initialization timeout\n");
-		return -EIO;
-	}
 		
 	/* read PHY registers */
 	for (reg = 0x09; reg <= 0x24; reg++) {
@@ -1303,50 +1639,58 @@ static int ar5523_reset(struct ar5523 *ar)
 
 	return error;
 }
+#endif
 
-static int ar5523_query_eeprom(struct ar5523 *ar)
+
+static int
+ar5523_get_devstatus(struct ar5523 *ar)
 {
-        int error;
-	u8 perm_addr[ETH_ALEN];
-	__be32 tmp;
-
-	/* retrieve MAC address */
-	error = ar5523_read_eeprom(ar, AR5523_EEPROM_MACADDR, perm_addr);
-	if (error) {
-		ar5523_err(ar, "could not read MAC address\n");
-		return error;
-	}
-	SET_IEEE80211_PERM_ADDR(ar->hw, perm_addr);
-
-	/* retrieve the maximum frame size that the hardware can receive */
-	error = ar5523_read_eeprom(ar, AR5523_EEPROM_RXBUFSZ, &tmp);
-	if (error) {
-		ar5523_err(ar, "could not read maximum Rx buffer size\n");
-		return error;
-	}
+	u8 macaddr[ETH_ALEN];
+	int error;
 	
-	ar->rxbufsz = be32_to_cpu(tmp) & 0xfff;
-	ar5523_dbg(ar, "maximum Rx buffer size %d\n", ar->rxbufsz);
+	/* retrieve MAC address */
+	error = ar5523_get_status(ar, ST_MAC_ADDR, macaddr, ETH_ALEN);
+	if (error != 0) {
+		ar5523_err(ar, "could not read MAC address\n");
+		return (error);
+	}
+
+	SET_IEEE80211_PERM_ADDR(ar->hw, macaddr);
+
+#if 0
+
+	error = uath_get_status(sc, ST_SERIAL_NUMBER,
+	    &sc->sc_serial[0], sizeof(sc->sc_serial));
+	if (error != 0) {
+		ar5523_err(ar,
+		    "could not read device serial number\n");
+		return (error);
+	}
+#endif
 	return 0;
 }
+
+
+
+
 
 /*
  * This is copied from rtl818x, but we should probably move this
  * to common code as in OpenBSD.
  */
 static const struct ieee80211_rate ar5523_rates[] = {
-	{ .bitrate = 10, .hw_value = 0, },
-	{ .bitrate = 20, .hw_value = 1, },
-	{ .bitrate = 55, .hw_value = 2, },
-	{ .bitrate = 110, .hw_value = 3, },
-	{ .bitrate = 60, .hw_value = 4, },
-	{ .bitrate = 90, .hw_value = 5, },
-	{ .bitrate = 120, .hw_value = 6, },
-	{ .bitrate = 180, .hw_value = 7, },
-	{ .bitrate = 240, .hw_value = 8, },
-	{ .bitrate = 360, .hw_value = 9, },
-	{ .bitrate = 480, .hw_value = 10, },
-	{ .bitrate = 540, .hw_value = 11, },
+	{ .bitrate = 10, .hw_value = 2, },
+	{ .bitrate = 20, .hw_value = 4 },
+	{ .bitrate = 55, .hw_value = 11, },
+	{ .bitrate = 110, .hw_value = 22, },
+	{ .bitrate = 60, .hw_value = 12, },
+	{ .bitrate = 90, .hw_value = 18, },
+	{ .bitrate = 120, .hw_value = 24, },
+	{ .bitrate = 180, .hw_value = 36, },
+	{ .bitrate = 240, .hw_value = 48, },
+	{ .bitrate = 360, .hw_value = 72, },
+	{ .bitrate = 480, .hw_value = 96, },
+	{ .bitrate = 540, .hw_value = 108, },
 };
 
 static const struct ieee80211_channel ar5523_channels[] = {
@@ -1496,6 +1840,7 @@ static int ar5523_probe(struct usb_interface *intf,
 	if (id->driver_info & AR5523_FLAG_PRE_FIRMWARE)
 		return ar5523_load_firmware(dev);
 
+
 	hw = ieee80211_alloc_hw(sizeof(*ar), &ar5523_ops);
 	if (!hw)
 		goto out;
@@ -1516,23 +1861,25 @@ static int ar5523_probe(struct usb_interface *intf,
 	if (error)
 		goto out_free_ar;
 
-	error = ar5523_alloc_rx_cmds(ar);
-	if (error)
-		goto out_free_tx_cmds;
-
 	/*
 	 * We're now ready to send/receive firmware commands.
 	 */
-	error = ar5523_reset(ar);
+	error = ar5523_host_available(ar);
 	if (error) {
 		ar5523_err(ar, "could not initialize adapter\n");
 		goto out_free_rx_cmds;
 	}
 
-	error = ar5523_query_eeprom(ar);
+	error = ar5523_get_devcap(ar);
 	if (error) {
-		ar5523_err(ar, "could not read EEPROM\n");
-		goto out_free_rx_cmds;
+		ar5523_err(ar, "could not get caps from adapter\n");
+		goto out_free_tx_cmds;
+	}
+
+	error = ar5523_get_devstatus(ar);
+	if (error != 0) {
+		ar5523_err(ar, "could not get device status\n");
+		goto out_free_tx_cmds;
 	}
 
 	ar5523_info(ar, "MAC/BBP AR5523, RF AR%c112\n",
@@ -1551,7 +1898,7 @@ static int ar5523_probe(struct usb_interface *intf,
 
 	error = ar5523_init_modes(ar);
 	if (error)
-		goto out_free_rx_cmds;
+		goto out_free_tx_cmds;
 
 	usb_set_intfdata(intf, hw);
 
@@ -1564,7 +1911,6 @@ static int ar5523_probe(struct usb_interface *intf,
 	return 0;
 
  out_free_rx_cmds:
-	ar5523_free_rx_cmds(ar);
  out_free_tx_cmds:
 	ar5523_free_tx_cmds(ar);
  out_free_ar:
@@ -1585,7 +1931,6 @@ static void ar5523_disconnect(struct usb_interface *intf)
 	del_timer_sync(&ar->stat_timer);
 
 	ar5523_free_tx_cmds(ar);
-	ar5523_free_rx_cmds(ar);
 
 	ieee80211_free_hw(hw);
 	usb_set_intfdata(intf, NULL);
