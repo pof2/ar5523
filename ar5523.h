@@ -239,6 +239,22 @@ struct ar5523_cmd_set_associd {		/* AR5523_WRITE_ASSOCID */
 	__u8	bssid[6];
 } __packed;
 
+/* structure for command WDCMSG_RESET */
+struct ar5523_cmd_reset {
+	__be32	flags;		/* channel flags */
+#define	UATH_CHAN_TURBO	0x0100
+#define	UATH_CHAN_CCK	0x0200
+#define	UATH_CHAN_OFDM	0x0400
+#define	UATH_CHAN_2GHZ	0x1000
+#define	UATH_CHAN_5GHZ	0x2000
+	__be32	freq;		/* channel frequency */
+	__be32	maxrdpower;
+	__be32	cfgctl;
+	__be32	twiceantennareduction;
+	__be32	channelchange;
+	__be32	keeprccontent;
+} __packed;
+
 
 /* structure for command WDCMSG_SET_BASIC_RATE */
 struct ar5523_cmd_rates {
