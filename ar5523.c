@@ -195,12 +195,15 @@ static void ar5523_read_reply(struct ar5523 *ar, struct ar5523_cmd_hdr *hdr,
 
 	if (cmd->odata) {
 		if (cmd->olen < olen) {
-			WARN_ON(1);
+			ar5523_err(ar, "olen to small %d < %d\n",
+				   cmd->olen, olen);
 			cmd->olen = 0;
+			cmd->res = -EOVERFLOW;
 		}
 		else {
 			cmd->olen = olen;
 			memcpy(cmd->odata, &rp[1], olen);
+			cmd->res = 0;
 		}
 	}
 
@@ -267,7 +270,6 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
 		break;
 
 	case WDCMSG_TARGET_START:
-		printk("WDCMSG_TARGET_START\n");
 		dlen = hdr->len - sizeof(*hdr);
 		if (dlen != (int)sizeof(u32)) {
 			ar5523_err(ar, "Invalid reply to WDCMSG_TARGET_START");
@@ -275,6 +277,7 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
 		}
 		memcpy(cmd->odata, hdr+1, sizeof(u32));
 		cmd->olen = sizeof(u32);
+		cmd->res = 0;
 		complete(&cmd->done);
 		break;
 	}
@@ -379,6 +382,7 @@ static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
 		ar5523_err(ar, "timeout waiting for command "
 				"%02x reply\n", code);
 		cmd->res = -EIO;
+		free_tx_cmd(ar, cmd);
 	}
 
 	return cmd->res;
@@ -945,9 +949,7 @@ err:
 static void ar5523_stop(struct ieee80211_hw *hw)
 {
 	struct ar5523 *ar = hw->priv;
-	__be32 val;
 
-	printk("STOP!\n");
 	ar5523_dbg(ar, "stop called\n");
 
 	mutex_lock(&ar->mutex);
@@ -955,12 +957,7 @@ static void ar5523_stop(struct ieee80211_hw *hw)
 	ar5523_set_led(ar, AR5523_LED_LINK, 0);
 	ar5523_set_led(ar, AR5523_LED_ACTIVITY, 0);
 
-	val = 0;
-	ar5523_cmd_write(ar, AR5523_CMD_SET_STATE, &val, sizeof(val), 0);
-	ar5523_cmd_write(ar, AR5523_CMD_RESET, NULL, 0, 0);
-
-	val = 0;
-	ar5523_cmd_write(ar, AR5523_CMD_15, &val, sizeof(val), 0);
+	ar5523_cmd_write(ar, WDCMSG_TARGET_STOP, NULL, 0, 0);
 
 	ar5523_free_rx_bufs(ar);
 	mutex_unlock(&ar->mutex);
