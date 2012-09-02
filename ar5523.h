@@ -158,6 +158,17 @@ struct uath_cmd_host_available {
 #define	ATH_SW_VER_BUILD	9999
 
 
+struct ar5523_chunk {
+	u8		seqnum;		/* sequence number for ordering */
+	u8		flags;
+#define	UATH_CFLAGS_FINAL	0x01	/* final chunk of a msg */
+#define	UATH_CFLAGS_RXMSG	0x02	/* chunk contains rx completion */
+#define	UATH_CFLAGS_DEBUG	0x04	/* for debugging */
+	__be16		length;		/* chunk size in bytes */
+	/* chunk data follows */
+} __packed;
+
+
 struct ar5523_rx_desc {
 	__be32		len;
 	__be32		reserved1[8];
@@ -335,17 +346,6 @@ struct ar5523_cmd_crypto {
 };
 
 
-/* structure for command AR5523_CMD_SET_CHAN */
-struct ar5523_set_chan {
-	__be32		flags;
-	__be32		freq;
-	__be32		magic1;
-	__be32		magic2;
-	__be32		reserved1;
-	__be32		magic3;
-	__be32		reserved2;
-};
-
 /* structure for command AR5523_CMD_SET_QUEUE */
 struct ar5523_qinfo {
 	__be32		qid;
@@ -361,13 +361,6 @@ struct ar5523_qinfo {
 	__be32		magic1;
 	__be32		magic2;
 };
-
-/* structure for command AR5523_CMD_31 */
-struct ar5523_cmd_31 {
-	__be32		magic1;
-	__be32		magic2;
-};
-
 
 
 struct ar5523_cmd_rx_filter {		/* WDCMSG_RX_FILTER */
