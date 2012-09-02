@@ -78,7 +78,12 @@ enum {
 	AR5523_TX_CMD_COUNT	= 2,
 
 	AR5523_TX_DATA_COUNT	= 16,
+	AR5523_TX_DATA_RESTART_COUNT = 8,
 	AR5523_RX_DATA_COUNT	= 16,
+};
+
+enum AR5523_flags {
+	AR5523_TX_QUEUE_STOPPED
 };
 
 struct ar5523_tx_cmd {
@@ -116,6 +121,7 @@ struct ar5523 {
 	struct usb_device	*dev;
 	struct ieee80211_hw	*hw;
 
+	unsigned long		flags;
 	struct mutex		mutex;
 	struct ar5523_tx_cmd	tx_cmd[AR5523_TX_CMD_COUNT];
 	wait_queue_head_t	tx_cmd_wait;
@@ -963,17 +969,13 @@ static int ar5523_set_rts_threshold(struct ieee80211_hw *hw, u32 value)
 	return ret;
 }
 
-static inline struct ar5523_tx_data *ar5523_get_tx_priv(struct sk_buff *skb)
-{
-	return (struct ar5523_tx_data*) &IEEE80211_SKB_CB(skb)->driver_data;
-}
-
 static void ar5523_data_tx_cb(struct urb *urb)
 {
 	struct sk_buff *skb = urb->context;
-	struct ar5523_tx_data *data = ar5523_get_tx_priv(skb);
+	struct ieee80211_tx_info *txi = IEEE80211_SKB_CB(skb);
+	struct ar5523_tx_data *data = (struct ar5523_tx_data *)
+				       txi->driver_data;
 	struct ar5523 *ar = data->ar;
-	struct ieee80211_tx_info *txi;
 
 	ar5523_dbg(ar, "data tx urb completed\n");
 
@@ -985,32 +987,49 @@ static void ar5523_data_tx_cb(struct urb *urb)
 		goto out;
 	}
 
-	txi = IEEE80211_SKB_CB(skb);
 	skb_pull(skb, sizeof(struct ar5523_tx_desc) + sizeof(__be32));
 
 	txi->flags |= IEEE80211_TX_STAT_ACK;
 	ieee80211_tx_status_irqsafe(ar->hw, skb);
 out:
 	atomic_dec(&ar->tx_data_queued);
+
+	if (atomic_read(&ar->tx_data_queued) < AR5523_TX_DATA_RESTART_COUNT) {
+		if (test_and_clear_bit(AR5523_TX_QUEUE_STOPPED, &ar->flags)) {
+			ar5523_dbg(ar, "restart tx queue\n");
+			ieee80211_wake_queues(ar->hw);
+		}
+	}
+
 	usb_free_urb(urb);
 }
 
 static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct ieee80211_hdr *wh = (struct ieee80211_hdr *)skb->data;
+	struct ieee80211_tx_info *txi = IEEE80211_SKB_CB(skb);
 	struct ar5523 *ar = hw->priv;
-	struct ar5523_tx_data *data;
+	struct ar5523_tx_data *data = (struct ar5523_tx_data *)
+				       txi->driver_data;
 	struct ar5523_tx_desc *desc;
 	struct urb *urb;
 	int paylen = skb->len;
 	int error = 0;
 	__be32 *hdr;
+	u32 txqid;
 
 	ar5523_dbg(ar, "tx called\n");
 
-	if (atomic_read(&ar->tx_data_queued) >= AR5523_TX_DATA_COUNT) {
+	if (atomic_read(&ar->tx_data_queued) >= (AR5523_TX_DATA_COUNT-1)) {
 		ar5523_dbg(ar, "tx queue full\n");
-		printk("tx queue full\n");
+		if (!test_and_set_bit(AR5523_TX_QUEUE_STOPPED, &ar->flags)) {
+			ar5523_dbg(ar, "stop queues\n");
+			ieee80211_stop_queues(hw);
+		}
+	}
+
+	if (atomic_read(&ar->tx_data_queued) >= AR5523_TX_DATA_COUNT) {
+		WARN_ON(1);
 		return;
 	}
 
@@ -1018,7 +1037,6 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (!urb)
 		goto out_free_skb;
 	
-	data = ar5523_get_tx_priv(skb);
 	data->ar = ar;
 
 	desc = (struct ar5523_tx_desc *)skb_push(skb, sizeof(*desc));
@@ -1027,10 +1045,10 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	/* fill Tx descriptor */
 	*hdr = AR5523_MAKECTL(1, skb->len - sizeof(__be32));
 
-	desc->len    = cpu_to_be32(skb->len);
-	desc->priv   = 0;
-	desc->paylen = cpu_to_be32(paylen);
-	desc->type   = cpu_to_be32(AR5523_TX_DATA);
+	desc->msglen  = cpu_to_be32(skb->len);
+	desc->msgid   = 0;
+	desc->buflen = cpu_to_be32(paylen);
+	desc->type   = cpu_to_be32(WDCMSG_SEND);
 	desc->flags  = 0;
 
 	/*
@@ -1038,12 +1056,17 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	 *	     the frame?
 	 */
 	if (is_multicast_ether_addr(wh->addr1)) {
-		desc->dest  = cpu_to_be32(AR5523_ID_BROADCAST);
-		desc->magic = cpu_to_be32(3);
+		desc->connid  = cpu_to_be32(AR5523_ID_BROADCAST);
+		txqid = 3;
 	} else {
-		desc->dest  = cpu_to_be32(AR5523_ID_BSS);
-		desc->magic = cpu_to_be32(1);
+		desc->connid  = cpu_to_be32(AR5523_ID_BSS);
+		txqid = 1;
 	}
+
+	if (txi->flags & IEEE80211_TX_CTL_USE_MINRATE)
+		txqid |= UATH_TXQID_MINRATE;
+
+	desc->txqid = cpu_to_be32(txqid);
 
 	usb_fill_bulk_urb(urb, ar->dev, ar5523_data_tx_pipe(ar->dev),
 			  skb->data, skb->len, ar5523_data_tx_cb, skb);

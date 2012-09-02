@@ -103,39 +103,9 @@ struct ar5523_cmd_hdr {
 #define	WDCMSG_SET_DEFAULT_KEY		0x43
 
 
-
-
-#define AR5523_CMD_SETUP		0x01
-#define AR5523_CMD_02		0x02
-#define AR5523_CMD_READ_MAC	0x03
-#define AR5523_CMD_WRITE_MAC	0x04
-#define AR5523_CMD_READ_EEPROM	0x05
-#define AR5523_CMD_STATS		0x06
-#define AR5523_CMD_07		0x07
-#define AR5523_CMD_SHUTDOWN	0x08
-#define AR5523_CMD_0B		0x0b
-#define AR5523_CREATE_CONNECTION 0x0c
-#define AR5523_CMD_0F		0x0f
-#define AR5523_NOTIF_STATS	0x10
-#define AR5523_NOTIF_READY	0x12
-#define AR5523_NOTIF_TX		0x13
-#define AR5523_CMD_15		0x15
+/* OLD commands: REMOVE! */
 #define AR5523_CMD_SET_LED	0x17
 #define AR5523_CMD_SET_XLED	0x18
-#define AR5523_CMD_1B		0x1b
-#define AR5523_CMD_1E		0x1e
-#define AR5523_CMD_CRYPTO		0x1d
-#define AR5523_CMD_SET_STATE	0x20
-#define AR5523_CMD_SET_BSSID	0x21
-#define	AR5523_WRITE_ASSOCID	0x22
-#define AR5523_CMD_24		0x24
-#define AR5523_CMD_SET_ADHOC_MODE	0x26
-#define AR5523_CMD_SET_BASIC_RATES	0x27
-#define AR5523_CMD_2E		0x2e
-#define AR5523_CMD_31		0x31
-#define AR5523_CMD_SET_FILTER	0x32
-#define AR5523_CMD_SET_CHAN	0x34
-#define AR5523_CMD_RESET		0x35
 #define AR5523_CMD_SET_QUEUE	0x3a
 #define AR5523_CMD_RESET_QUEUE	0x3b
 
@@ -202,38 +172,26 @@ struct ar5523_rx_desc {
 
 #define AR5523_MAKECTL(qid, len)	cpu_to_be32((qid) << 16 | (len))
 
-struct ar5523_tx_desc {
-	__be32		len;
-	__u32		priv;	/* driver private data
-				   don't care about endianess */
-	__be32		type;
-#define AR5523_TX_DATA	0xe
-#define AR5523_TX_NULL	0xf
 
-	__be32		magic;
-	__be32		dest;
+
+struct ar5523_tx_desc {
+	__be32	msglen;
+	__be32	msgid;		/* msg id (supplied by host) */
+	__be32	type;		/* opcode: WDMSG_SEND or WDCMSG_FLUSH */
+	__be32	txqid;		/* tx queue id and flags */
+#define	UATH_TXQID_MASK		0x0f
+#define	UATH_TXQID_MINRATE	0x10	/* use min tx rate */
+#define	UATH_TXQID_FF		0x20	/* content is fast frame */
+	__be32	connid;		/* tx connection id */
+#define UATH_ID_INVALID	0xffffffff	/* for sending prior to connection */
+	__be32	flags;		/* non-zero if response desired */
+#define UATH_TX_NOTIFY	(1 << 24)	/* f/w will send a UATH_NOTIF_TX */
+	__be32	buflen;		/* payload length */
+} __packed;
+
+
 #define AR5523_ID_BSS		2
 #define AR5523_ID_BROADCAST	0xffffffff
-
-	__be32		flags;
-#define AR5523_TX_NOTIFY	(1 << 24)	/* f/w will send a AR5523_NOTIF_TX */
-
-	__be32		paylen;
-};
-
-/* structure for command AR5523_CMD_SETUP */
-struct ar5523_cmd_setup {
-	__be32		magic1;
-	__be32		magic2;
-	__be32		magic3;
-	__be32		magic4;
-};
-
-/* structure for commands AR5523_CMD_READ_MAC and AR5523_CMD_READ_EEPROM */
-struct ar5523_read_mac {
-	__be32		len;
-	__u8		data[32];
-};
 
 /* structure for command UATH_CMD_WRITE_MAC */
 struct ar5523_write_mac {
@@ -241,22 +199,6 @@ struct ar5523_write_mac {
 	__be32	len;
 	u8		data[32];
 } __packed;
-
-
-/* structure for command AR5523_CMD_0B */
-struct ar5523_cmd_0b {
-	__be32		code;
-	__be32		reserved;
-	__be32		size;
-	__u8		data[44];
-};
-
-/* structure for command AR5523_CMD_0C */
-struct ar5523_cmd_0c {
-	__be32		magic1;
-	__be32		magic2;
-	__be32		magic3;
-};
 
 
 struct ar5523_cmd_rateset {
@@ -328,8 +270,6 @@ struct ar5523_cmd_create_connection {
 
 
 
-
-
 /* structure for command AR5523_CMD_SET_LED */
 struct ar5523_cmd_led {
 	__be32		which;
@@ -347,27 +287,6 @@ struct ar5523_cmd_xled {
 	__be32		rate;
 	__be32		mode;
 };
-
-
-/* structure for command AR5523_CMD_CRYPTO */
-struct ar5523_cmd_crypto {
-	__be32		keyidx;
-#define AR5523_DEFAULT_KEY	6
-
-	__be32		magic1;
-	__be32		size;
-	__be32		reserved1;
-	__be32		mask;
-#define AR5523_ADDR_LEN		6		/* size of 802.11 address */
-	__u8		addr[AR5523_ADDR_LEN];
-	__be16		reserved2;
-	__be32		flags;
-	__be32		reserved3[2];
-	__u8		key[68];
-	__u8		magic2[136];
-	__u8		magic3[136];
-};
-
 
 /* structure for command AR5523_CMD_SET_QUEUE */
 struct ar5523_qinfo {
@@ -405,17 +324,6 @@ struct ar5523_cmd_rx_filter {		/* WDCMSG_RX_FILTER */
 #define UATH_FILTER_OP_TEMP		0x3
 #define UATH_FILTER_OP_RESTORE		0x4
 } __packed;
-
-
-/* structure for command AR5523_CMD_SET_BSSID */
-struct ar5523_cmd_bssid {
-	__be32		reserved1;
-	__be32		flags1;
-	__be32		flags2;
-	__be32		reserved2;
-	__be32		len;
-	__u8		bssid[AR5523_ADDR_LEN];
-};
 
 enum {
 	CFG_NONE,			/* Sentinal to indicate "no config" */
