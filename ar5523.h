@@ -169,13 +169,36 @@ struct ar5523_chunk {
 } __packed;
 
 
+/*
+ * Message format for a WDCMSG_DATA_AVAIL message from Target to Host.
+ */
 struct ar5523_rx_desc {
-	__be32		len;
-	__be32		reserved1[8];
-	__be32		rssi;
-	__be32		freq;
-	__be32		reserved2[5];
-};
+	__be32	len;		/* msg length including header */
+	__be32	code;		/* WDCMSG_DATA_AVAIL */
+	__be32	gennum;		/* generation number */
+	__be32	status;		/* start of RECEIVE_INFO */
+#define	UATH_STATUS_OK			0
+#define	UATH_STATUS_STOP_IN_PROGRESS	1
+#define	UATH_STATUS_CRC_ERR		2
+#define	UATH_STATUS_PHY_ERR		3
+#define	UATH_STATUS_DECRYPT_CRC_ERR	4
+#define	UATH_STATUS_DECRYPT_MIC_ERR	5
+#define	UATH_STATUS_DECOMP_ERR		6
+#define	UATH_STATUS_KEY_ERR		7
+#define	UATH_STATUS_ERR			8
+	__be32	tstamp_low;	/* low-order 32-bits of rx timestamp */
+	__be32	tstamp_high;	/* high-order 32-bits of rx timestamp */
+	__be32	framelen;	/* frame length */
+	__be32	rate;		/* rx rate code */
+	__be32	antenna;
+	__be32	rssi;
+	__be32	channel;
+	__be32	phyerror;
+	__be32	connix;		/* key table ix for bss traffic */
+	__be32	decrypterror;
+	__be32	keycachemiss;
+	__be32	pad;		/* XXX? */
+} __packed;
 
 #define AR5523_MAKECTL(qid, len)	cpu_to_be32((qid) << 16 | (len))
 
