@@ -172,8 +172,6 @@ struct ar5523_rx_desc {
 
 #define AR5523_MAKECTL(qid, len)	cpu_to_be32((qid) << 16 | (len))
 
-
-
 struct ar5523_tx_desc {
 	__be32	msglen;
 	__be32	msgid;		/* msg id (supplied by host) */
@@ -231,7 +229,6 @@ struct ar5523_cmd_reset {
 	__be32	keeprccontent;
 } __packed;
 
-
 /* structure for command WDCMSG_SET_BASIC_RATE */
 struct ar5523_cmd_rates {
 	__be32	connid;
@@ -267,9 +264,6 @@ struct ar5523_cmd_create_connection {
 	struct ar5523_cmd_connection_attr	connattr;
 } __packed;
 
-
-
-
 /* structure for command AR5523_CMD_SET_LED */
 struct ar5523_cmd_led {
 	__be32		which;
@@ -303,7 +297,6 @@ struct ar5523_qinfo {
 	__be32		magic1;
 	__be32		magic2;
 };
-
 
 struct ar5523_cmd_rx_filter {		/* WDCMSG_RX_FILTER */
 	__be32	bits;
@@ -363,7 +356,6 @@ enum {
 	CFG_GMODE_NON_ERP_PREAMBLE,
 	CFG_WDC_TRANSPORT_CHUNK_SIZE,
 };
-
 
 enum {
 	/* Sentinal to indicate "no capability" */
@@ -435,7 +427,6 @@ enum {
 	ST_WDC_TRANSPORT_CHUNK_SIZE,
 };
 
-
 enum {
 	TARGET_DEVICE_AWAKE,
 	TARGET_DEVICE_SLEEP,
@@ -444,7 +435,6 @@ enum {
 	TARGET_DEVICE_SUSPEND,
 	TARGET_DEVICE_RESUME,
 };
-
 
 #define AR5523_EEPROM_MACADDR	0x0b
 #define AR5523_EEPROM_RXBUFSZ	0x0f
