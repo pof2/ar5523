@@ -1409,8 +1409,7 @@ static int ar5523_host_available(struct ar5523 *ar)
 		&setup, sizeof setup, NULL, 0, 0);
 }
 
-static int
-ar5523_get_devstatus(struct ar5523 *ar)
+static int ar5523_get_devstatus(struct ar5523 *ar)
 {
 	u8 macaddr[ETH_ALEN];
 	int error;
@@ -1431,6 +1430,33 @@ ar5523_get_devstatus(struct ar5523 *ar)
 		return error;
 	}
 
+	return 0;
+}
+
+#define AR5523_SANE_RXBUFSZ 2000
+
+static int ar5523_get_max_rxsz(struct ar5523 *ar)
+{
+	int error;
+	__be32 rxsize;
+
+	/* Get max rx size */
+	error = ar5523_get_status(ar, ST_WDC_TRANSPORT_CHUNK_SIZE, &rxsize,
+				  sizeof(rxsize));
+	if (error != 0) {
+		ar5523_err(ar, "could not read max RX size\n");
+		return error;
+	}
+
+	ar->rxbufsz = be32_to_cpu(rxsize);
+
+	if (!ar->rxbufsz || ar->rxbufsz > AR5523_SANE_RXBUFSZ) {
+		ar5523_err(ar, "Bad rxbufsz from device. Using %d instead\n",
+			   AR5523_SANE_RXBUFSZ);
+		ar->rxbufsz = AR5523_SANE_RXBUFSZ;
+	}
+
+	ar5523_dbg(ar, "Mac RX buf size: %d\n", ar->rxbufsz);
 	return 0;
 }
 
@@ -1620,8 +1646,6 @@ static int ar5523_probe(struct usb_interface *intf,
 	INIT_LIST_HEAD(&ar->tx_cmd_used);
 	spin_lock_init(&ar->tx_cmd_list_lock);
 
-	ar->rxbufsz = 2000;	//TODO
-
 	error = ar5523_alloc_tx_cmds(ar);
 	if (error) {
 		ar5523_err(ar, "Could not allocate tx command buffers\n");
@@ -1634,6 +1658,12 @@ static int ar5523_probe(struct usb_interface *intf,
 	error = ar5523_host_available(ar);
 	if (error) {
 		ar5523_err(ar, "could not initialize adapter\n");
+		goto out_free_tx_cmds;
+	}
+
+	error = ar5523_get_max_rxsz(ar);
+	if (error) {
+		ar5523_err(ar, "could not get caps from adapter\n");
 		goto out_free_tx_cmds;
 	}
 

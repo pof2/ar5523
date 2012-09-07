@@ -436,9 +436,6 @@ enum {
 	TARGET_DEVICE_RESUME,
 };
 
-#define AR5523_EEPROM_MACADDR	0x0b
-#define AR5523_EEPROM_RXBUFSZ	0x0f
-
 #define AR5523_MAX_TXBUFSZ	\
 	(sizeof(__be32) + sizeof(struct ar5523_tx_desc) + IEEE80211_MAX_LEN)
 
