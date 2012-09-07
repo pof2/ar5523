@@ -120,7 +120,7 @@ struct ar5523_cmd_hdr {
 #define	WDCMSG_SET_DEFAULT_KEY		0x43
 
 
-/* OLD commands: REMOVE! */
+/* TODO: OLD commands: REMOVE! */
 #define AR5523_CMD_SET_QUEUE	0x3a
 #define AR5523_CMD_RESET_QUEUE	0x3b
 

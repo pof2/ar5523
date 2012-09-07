@@ -1167,6 +1167,42 @@ static int ar5523_hwconfig(struct ieee80211_hw *hw, u32 changed)
 	return 0;
 }
 
+static int ar5523_get_wlan_mode(struct ar5523 *ar,
+				 struct ieee80211_bss_conf *bss_conf)
+{
+	struct ieee80211_supported_band *band;
+	int bit;
+	struct ieee80211_sta *sta;
+	u32 sta_rate_set;
+
+	band = ar->hw->wiphy->bands[ar->hw->conf.channel->band];
+	sta = ieee80211_find_sta(ar->vif, bss_conf->bssid);
+	if (!sta) {
+		ar5523_info(ar, "STA not found!\n");
+		return WLAN_MODE_11b;
+	}
+	sta_rate_set = sta->supp_rates[ar->hw->conf.channel->band];
+
+	for (bit = 0; bit < band->n_bitrates; bit++) {
+		if (sta_rate_set & 1) {
+			int rate = band->bitrates[bit].bitrate;
+			switch (rate) {
+			case 60:
+			case 90:
+			case 120:
+			case 180:
+			case 240:
+			case 360:
+			case 480:
+			case 540:
+				return WLAN_MODE_11g;
+			}
+		}
+		sta_rate_set >>= 1;
+	}
+	return WLAN_MODE_11b;
+}
+
 static void ar5523_create_rateset(struct ar5523 *ar,
 				  struct ieee80211_vif *vif,
 				  struct ieee80211_bss_conf *bss_conf,
@@ -1177,7 +1213,6 @@ static void ar5523_create_rateset(struct ar5523 *ar,
 	struct ieee80211_sta *sta;
 	int bit, i = 0;
 	u32 sta_rate_set;
-
 
 	if (basic)
 		sta_rate_set = bss_conf->basic_rates;
@@ -1225,6 +1260,7 @@ static int ar5523_create_connection(struct ar5523 *ar,
 				     struct ieee80211_bss_conf *bss)
 {
 	struct ar5523_cmd_create_connection create;
+	int wlan_mode;
 
 	memset(&create, 0, sizeof(create));
 	create.connid = cpu_to_be32(2);
@@ -1234,10 +1270,8 @@ static int ar5523_create_connection(struct ar5523 *ar,
 
 	ar5523_create_rateset(ar, vif, bss, &create.connattr.rateset, false);
 
-	if (1) //TODO
-		create.connattr.wlanmode = cpu_to_be32(WLAN_MODE_11g);
-	else
-		create.connattr.wlanmode = cpu_to_be32(WLAN_MODE_11b);
+	wlan_mode = ar5523_get_wlan_mode(ar, bss);
+	create.connattr.wlanmode = cpu_to_be32(wlan_mode);
 
 	return ar5523_cmd_write(ar, WDCMSG_CREATE_CONNECTION, &create,
 				sizeof(create), 0);
