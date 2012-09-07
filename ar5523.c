@@ -564,31 +564,36 @@ static void ar5523_stat(unsigned long arg)
 	ieee80211_queue_work(ar->hw, &ar->stat_work);
 }
 
-static int ar5523_set_led(struct ar5523 *ar, int which, int on)
+static int ar5523_set_ledsteady(struct ar5523 *ar, int lednum, int ledmode)
 {
-	struct ar5523_cmd_led led;
+	struct uath_cmd_ledsteady led;
 
-	led.which = cpu_to_be32(which);
-	led.state = cpu_to_be32(on ? AR5523_LED_ON : AR5523_LED_OFF);
+	led.lednum = cpu_to_be32(lednum);
+	led.ledmode = cpu_to_be32(ledmode);
 
-	ar5523_dbg(ar, "switching %s led %s\n",
-		       (which == AR5523_LED_LINK) ? "link" : "activity",
-		       on ? "on" : "off");
-
-	return ar5523_cmd_write(ar, AR5523_CMD_SET_LED, &led, sizeof(led), 0);
+	ar5523_dbg(ar, "set %s led %s (steady)\n",
+		   (lednum == UATH_LED_LINK) ? "link" : "activity",
+		   ledmode ? "on" : "off");
+	return ar5523_cmd_write(ar, WDCMSG_SET_LED_STEADY, &led, sizeof(led),
+		0);
 }
 
-static int ar5523_set_xled(struct ar5523 *ar, int which)
+static int ar5523_set_ledblink(struct ar5523 *ar, int lednum, int ledmode,
+				int blinkrate, int slowmode)
 {
-	struct ar5523_cmd_xled xled;
+	struct uath_cmd_ledblink led;
 
-	memset(&xled, 0, sizeof(xled));
-	xled.which = cpu_to_be32(which);
-	xled.rate = cpu_to_be32(1);
-	xled.mode = cpu_to_be32(2);
+	led.lednum = cpu_to_be32(lednum);
+	led.ledmode = cpu_to_be32(ledmode);
+	led.blinkrate = cpu_to_be32(blinkrate);
+	led.slowmode = cpu_to_be32(slowmode);
 
-	return ar5523_cmd_write(ar, AR5523_CMD_SET_XLED,
-				&xled, sizeof(xled), 0);
+	ar5523_dbg(ar, "set %s led %s (blink)\n",
+		   (lednum == UATH_LED_LINK) ? "link" : "activity",
+		   ledmode ? "on" : "off");
+
+	return ar5523_cmd_write(ar, WDCMSG_SET_LED_BLINK, &led, sizeof(led),
+				 0);
 }
 
 static int ar5523_set_rxfilter(struct ar5523 *ar, u32 bits, u32 op)
@@ -955,6 +960,7 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	    UATH_FILTER_RX_BCAST,
 	    UATH_FILTER_OP_SET);
 
+	ar5523_set_ledsteady(ar, UATH_LED_ACTIVITY, UATH_LED_ON);
 	ar5523_dbg(ar, "start OK\n");
 
 err:
@@ -970,8 +976,8 @@ static void ar5523_stop(struct ieee80211_hw *hw)
 
 	mutex_lock(&ar->mutex);
 
-	ar5523_set_led(ar, AR5523_LED_LINK, 0);
-	ar5523_set_led(ar, AR5523_LED_ACTIVITY, 0);
+	ar5523_set_ledsteady(ar, UATH_LED_LINK, UATH_LED_OFF);
+	ar5523_set_ledsteady(ar, UATH_LED_ACTIVITY, UATH_LED_OFF);
 
 	ar5523_cmd_write(ar, WDCMSG_TARGET_STOP, NULL, 0, 0);
 
@@ -1287,17 +1293,13 @@ static void ar5523_bss_info_changed(struct ieee80211_hw *hw,
 		}
 
 		/* turn link LED on */
-		ar5523_set_led(ar, AR5523_LED_LINK, 1);
-
-		/* make activity LED blink */
-		ar5523_set_xled(ar, 1);
+		ar5523_set_ledsteady(ar, UATH_LED_LINK, UATH_LED_ON);
 
 		/* start statistics timer */
 //		mod_timer(&ar->stat_timer, jiffies + HZ);
 
 	} else {
-		ar5523_set_led(ar, AR5523_LED_LINK, 0);
-		ar5523_set_led(ar, AR5523_LED_ACTIVITY, 0);
+		ar5523_set_ledsteady(ar, UATH_LED_LINK, UATH_LED_OFF);
 	}
 
 out_unlock:

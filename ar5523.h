@@ -121,8 +121,6 @@ struct ar5523_cmd_hdr {
 
 
 /* OLD commands: REMOVE! */
-#define AR5523_CMD_SET_LED	0x17
-#define AR5523_CMD_SET_XLED	0x18
 #define AR5523_CMD_SET_QUEUE	0x3a
 #define AR5523_CMD_RESET_QUEUE	0x3b
 
@@ -281,23 +279,25 @@ struct ar5523_cmd_create_connection {
 	struct ar5523_cmd_connection_attr	connattr;
 } __packed;
 
-/* structure for command AR5523_CMD_SET_LED */
-struct ar5523_cmd_led {
-	__be32		which;
-#define AR5523_LED_LINK		0
-#define AR5523_LED_ACTIVITY	1
+struct uath_cmd_ledsteady {		/* WDCMSG_SET_LED_STEADY */
+	__be32	lednum;
+#define UATH_LED_LINK		0
+#define UATH_LED_ACTIVITY	1
+	__be32	ledmode;
+#define UATH_LED_OFF	0
+#define UATH_LED_ON	1
+} __packed;
 
-	__be32		state;
-#define AR5523_LED_OFF	0
-#define AR5523_LED_ON	1
-};
+struct uath_cmd_ledblink {		/* WDCMSG_SET_LED_BLINK */
+	__be32	lednum;
+	__be32	ledmode;
+	__be32	blinkrate;
+	__be32	slowmode;
+} __packed;
 
-/* structure for command AR5523_CMD_SET_XLED */
-struct ar5523_cmd_xled {
-	__be32		which;
-	__be32		rate;
-	__be32		mode;
-};
+struct uath_cmd_ledstate {		/* WDCMSG_SET_LED_STATE */
+	__be32	connected;
+} __packed;
 
 /* structure for command AR5523_CMD_SET_QUEUE */
 struct ar5523_qinfo {
