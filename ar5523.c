@@ -595,24 +595,6 @@ static int ar5523_set_ledsteady(struct ar5523 *ar, int lednum, int ledmode)
 		0);
 }
 
-static int ar5523_set_ledblink(struct ar5523 *ar, int lednum, int ledmode,
-				int blinkrate, int slowmode)
-{
-	struct uath_cmd_ledblink led;
-
-	led.lednum = cpu_to_be32(lednum);
-	led.ledmode = cpu_to_be32(ledmode);
-	led.blinkrate = cpu_to_be32(blinkrate);
-	led.slowmode = cpu_to_be32(slowmode);
-
-	ar5523_dbg(ar, "set %s led %s (blink)\n",
-		   (lednum == UATH_LED_LINK) ? "link" : "activity",
-		   ledmode ? "on" : "off");
-
-	return ar5523_cmd_write(ar, WDCMSG_SET_LED_BLINK, &led, sizeof(led),
-				 0);
-}
-
 static int ar5523_set_rxfilter(struct ar5523 *ar, u32 bits, u32 op)
 {
 	struct ar5523_cmd_rx_filter rxfilter;
