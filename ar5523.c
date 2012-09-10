@@ -248,25 +248,18 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
 	/* sync/async unlink faults aren't errors */
 	if (urb->status && (urb->status != -ENOENT &&
 	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
-		ar5523_dbg(ar,
-			   "nonzero write bulk status received: %d\n",
+		ar5523_dbg(ar, "nonzero write bulk status received: %d\n",
 			   urb->status);
-		cmd->res = urb->status;
-		complete(&cmd->done);
 		return;
 	}
 
 	if (urb->status) {
 		ar5523_err(ar, "RX USB error %d.\n", urb->status);
-		cmd->res = urb->status;
-		complete(&cmd->done);
 		return;
 	}
 
 	if (urb->actual_length < sizeof(struct ar5523_cmd_hdr)) {
 		ar5523_err(ar, "RX USB to short.\n");
-		cmd->res = -1;
-		complete(&cmd->done);
 		return;
 	}
 
