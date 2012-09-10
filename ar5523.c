@@ -156,18 +156,16 @@ struct ar5523 {
 	struct	list_head	rx_data_used;
 	atomic_t		rx_data_free_cnt;
 
-	u8			serial[16];
-
 	struct completion	ready;
 	struct work_struct	rx_refill_work;
 
 	int			rxbufsz;
+	u8			serial[16];
 
 	struct ieee80211_channel channels[14];
 	struct ieee80211_rate	rates[12];
 	struct ieee80211_supported_band band;
 	struct ieee80211_vif	*vif;
-
 };
 
 struct ar5523_wme_settings {
@@ -1471,7 +1469,6 @@ static int ar5523_get_max_rxsz(struct ar5523 *ar)
 	return 0;
 }
 
-
 /*
  * This is copied from rtl818x, but we should probably move this
  * to common code as in OpenBSD.
@@ -1804,6 +1801,7 @@ static struct usb_device_id ar5523_id_table[] = {
 	AR5523_DEVICE_UG(0x0cde, 0x0012),	/* Zcom / AR5523 */
 	AR5523_DEVICE_UG(0x1385, 0x4250),	/* Netgear3 / WG111T (2) */
 	AR5523_DEVICE_UG(0x1385, 0x5f00),	/* Netgear / WPN111 */
+	AR5523_DEVICE_UG(0x1385, 0x5f02),	/* Netgear / WPN111 */
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, ar5523_id_table);
