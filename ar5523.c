@@ -810,7 +810,7 @@ static void ar5523_rx_refill_work(struct work_struct *work)
 	while (!list_empty(&ar->rx_data_free)) {
 		data = (struct ar5523_rx_data *) ar->rx_data_free.next;
 
-		data->skb = dev_alloc_skb(ar->rxbufsz);
+		data->skb = alloc_skb(ar->rxbufsz, GFP_KERNEL);
 		if (!data->skb) {
 			ar5523_err(ar, "could not allocate rx skbuff\n");
 			return;
@@ -823,6 +823,7 @@ static void ar5523_rx_refill_work(struct work_struct *work)
 
 		error = usb_submit_urb(data->urb, GFP_KERNEL);
 		if (error) {
+			kfree_skb(data->skb);
 			ar5523_err(ar, "error %d when submitting rx data urb\n",
 				       error);
 			return;
