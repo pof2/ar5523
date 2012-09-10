@@ -663,44 +663,28 @@ static int ar5523_wme_init(struct ar5523 *ar)
 	return error;
 }
 
-static int ar5523_switch_channel(struct ar5523 *ar)
+static void ar5523_flush(struct ieee80211_hw *hw, bool drop)
 {
+	struct ar5523 *ar = hw->priv;
 	int error;
 
-	/* set radio frequency */
-	error = ar5523_set_chan(ar);
-	if (error) {
-		ar5523_err(ar, "could not set channel, error %d\n", error);
-		goto failed;
-	}
+	ar5523_dbg(ar, "flush called\n");
+
+	mutex_lock(&ar->mutex);
+
 	/* reset Tx rings */
 	error = ar5523_reset_tx_queues(ar);
 	if (error) {
 		ar5523_err(ar, "could not reset Tx queues, error %d\n", error);
-		goto failed;
+		goto out_unlock;
 	}
 	/* set Tx rings WME properties */
 	error = ar5523_wme_init(ar);
-	if (error) {
+	if (error)
 		ar5523_err(ar, "could not init Tx queues, error %d\n", error);
-		goto failed;
-	}
-#if 0
-	error = ar5523_set_ledstate(ar, 0);
-	if (error) {
-		ar5523_err(ar, "could not set led state, error %d\n", error);
-		goto failed;
-	}
 
-
-	error = ar5523_flush(sar);
-	if (error) {
-		ar5523_err(ar, "could not flush pipes, error %d\n", error);
-		goto failed;
-	}
-#endif
-failed:
-	return error;
+out_unlock:
+	mutex_unlock(&ar->mutex);
 }
 
 static void ar5523_data_rx_cb(struct urb *urb)
@@ -932,7 +916,7 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	    "WDCMSG_TARGET_START", be32_to_cpu(val));
 
 	/* set default channel */
-	error = ar5523_switch_channel(ar);
+	error = ar5523_set_chan(ar);
 	if (error) {
 		ar5523_err(ar, "could not switch channel, error %d\n", error);
 		goto err;
@@ -1152,7 +1136,7 @@ static int ar5523_hwconfig(struct ieee80211_hw *hw, u32 changed)
 	ar5523_dbg(ar, "config called\n");
 	if (changed & IEEE80211_CONF_CHANGE_CHANNEL) {
 		ar5523_dbg(ar, "Do channel switch\n");
-		ar5523_switch_channel(ar);
+		ar5523_set_chan(ar);
 	}
 	mutex_unlock(&ar->mutex);
 
@@ -1372,6 +1356,7 @@ static const struct ieee80211_ops ar5523_ops = {
 	.config			= ar5523_hwconfig,
 	.bss_info_changed	= ar5523_bss_info_changed,
 	.configure_filter	= ar5523_configure_filter,
+	.flush			= ar5523_flush,
 };
 
 static void ar5523_free_tx_cmd(struct ar5523 *ar)
