@@ -45,8 +45,6 @@
  * OpenBSD, who did black-box analysis of the Windows binary driver to find
  * out how the hardware works.  It contains a lot magic numbers because of
  * that and only has minimal functionality.
- *
- * TODO: implement hw WEP support.
  */
 #include <linux/compiler.h>
 #include <linux/init.h>
