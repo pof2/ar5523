@@ -1102,16 +1102,16 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	usb_fill_bulk_urb(urb, ar->dev, ar5523_data_tx_pipe(ar->dev),
 			  skb->data, skb->len, ar5523_data_tx_cb, skb);
 
+	spin_lock_irqsave(&ar->rx_data_list_lock, flags);
+	list_add_tail(&data->list, &ar->tx_data_list);
+	atomic_inc(&ar->tx_data_queued);
+	spin_unlock_irqrestore(&ar->rx_data_list_lock, flags);
+
 	error = usb_submit_urb(urb, GFP_ATOMIC);
 	if (error) {
 		ar5523_err(ar, "error %d when submitting tx urb\n", error);
 		goto out_free_urb;
 	}
-
-	spin_lock_irqsave(&ar->rx_data_list_lock, flags);
-	list_add_tail(&data->list, &ar->tx_data_list);
-	atomic_inc(&ar->tx_data_queued);
-	spin_unlock_irqrestore(&ar->rx_data_list_lock, flags);
 
 	return;
 
