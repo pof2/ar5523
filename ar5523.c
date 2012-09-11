@@ -107,6 +107,7 @@ enum {
 #define AR5523_CMD_ID	1
 
 enum AR5523_flags {
+	AR5523_HW_UP,
 	AR5523_TX_QUEUE_STOPPED
 };
 
@@ -128,7 +129,9 @@ struct ar5523_rx_cmd {
 };
 
 struct ar5523_tx_data {
+	struct list_head	list;
 	struct ar5523		*ar;
+	struct urb		*urb;
 };
 
 struct ar5523_rx_data {
@@ -145,6 +148,9 @@ struct ar5523 {
 	unsigned long		flags;
 	struct mutex		mutex;
 	struct ar5523_tx_cmd	tx_cmd;
+
+	struct list_head	tx_data_list;
+	spinlock_t		tx_data_list_lock;
 	atomic_t		tx_data_queued;
 
 	void			*rx_cmd_buf;
@@ -152,8 +158,8 @@ struct ar5523 {
 
 	struct ar5523_rx_data	rx_data[AR5523_RX_DATA_COUNT];
 	spinlock_t		rx_data_list_lock;
-	struct	list_head	rx_data_free;
-	struct	list_head	rx_data_used;
+	struct list_head	rx_data_free;
+	struct list_head	rx_data_used;
 	atomic_t		rx_data_free_cnt;
 
 	struct completion	ready;
@@ -771,9 +777,9 @@ skip:
 	list_move(&data->list, &ar->rx_data_free);
 	spin_unlock_irqrestore(&ar->rx_data_list_lock, flags);
 	if (atomic_inc_return(&ar->rx_data_free_cnt) >=
-	    AR5523_RX_DATA_REFILL_COUNT) {
+	    AR5523_RX_DATA_REFILL_COUNT &&
+	    test_bit(AR5523_HW_UP, &ar->flags))
 		ieee80211_queue_work(ar->hw, &ar->rx_refill_work);
-	}
 
 }
 
@@ -864,6 +870,24 @@ err:
 	return -ENOMEM;
 }
 
+static void ar5523_cancel_tx_urbs(struct ar5523 *ar)
+{
+	struct ar5523_tx_data *data = NULL;
+	unsigned long flags;
+
+	printk("%s\n", __func__);
+	do {
+		spin_lock_irqsave(&ar->tx_data_list_lock, flags);
+		if (list_empty(&ar->tx_data_list))
+			data = NULL;
+		else
+			data = (struct ar5523_tx_data *) ar->tx_data_list.next;
+		spin_unlock_irqrestore(&ar->tx_data_list_lock, flags);
+		if (data)
+			usb_kill_urb(data->urb);
+	} while (data);
+}
+
 /*
  * Interface routines to the mac80211 stack.
  */
@@ -920,6 +944,7 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	/* XXX? check */
 	ar5523_cmd_write(ar, WDCMSG_RESET_KEY_CACHE, NULL, 0, 0);
 
+	set_bit(AR5523_HW_UP, &ar->flags);
 	ieee80211_queue_work(ar->hw, &ar->rx_refill_work);
 
 	/* enable Rx */
@@ -944,6 +969,7 @@ static void ar5523_stop(struct ieee80211_hw *hw)
 	ar5523_dbg(ar, "stop called\n");
 
 	mutex_lock(&ar->mutex);
+	clear_bit(AR5523_HW_UP, &ar->flags);
 
 	ar5523_set_ledsteady(ar, UATH_LED_LINK, UATH_LED_OFF);
 	ar5523_set_ledsteady(ar, UATH_LED_ACTIVITY, UATH_LED_OFF);
@@ -952,6 +978,7 @@ static void ar5523_stop(struct ieee80211_hw *hw)
 
 	cancel_work_sync(&ar->rx_refill_work);
 	ar5523_cancel_rx_bufs(ar);
+	ar5523_cancel_tx_urbs(ar);
 	mutex_unlock(&ar->mutex);
 }
 
@@ -976,8 +1003,13 @@ static void ar5523_data_tx_cb(struct urb *urb)
 	struct ar5523_tx_data *data = (struct ar5523_tx_data *)
 				       txi->driver_data;
 	struct ar5523 *ar = data->ar;
+	unsigned long flags;
 
 	ar5523_dbg(ar, "data tx urb completed\n");
+
+	spin_lock_irqsave(&ar->tx_data_list_lock, flags);
+	list_del(&data->list);
+	spin_unlock_irqrestore(&ar->tx_data_list_lock, flags);
 
 	/* sync/async unlink faults aren't errors */
 	if (urb->status && (urb->status != -ENOENT &&
@@ -1017,6 +1049,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	int error = 0;
 	__be32 *hdr;
 	u32 txqid;
+	unsigned long flags;
 
 	ar5523_dbg(ar, "tx called\n");
 
@@ -1038,6 +1071,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 		goto out_free_skb;
 
 	data->ar = ar;
+	data->urb = urb;
 
 	desc = (struct ar5523_tx_desc *)skb_push(skb, sizeof(*desc));
 	hdr = (__be32 *)skb_push(skb, sizeof(__be32));
@@ -1077,7 +1111,10 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 		goto out_free_urb;
 	}
 
+	spin_lock_irqsave(&ar->rx_data_list_lock, flags);
+	list_add_tail(&data->list, &ar->tx_data_list);
 	atomic_inc(&ar->tx_data_queued);
+	spin_unlock_irqrestore(&ar->rx_data_list_lock, flags);
 
 	return;
 
@@ -1626,10 +1663,13 @@ static int ar5523_probe(struct usb_interface *intf,
 	ar->dev = dev;
 	mutex_init(&ar->mutex);
 	init_completion(&ar->ready);
+
+	INIT_LIST_HEAD(&ar->tx_data_list);
+	spin_lock_init(&ar->tx_data_list_lock);
 	atomic_set(&ar->tx_data_queued, 0);
+
 	atomic_set(&ar->rx_data_free_cnt, 0);
 	INIT_WORK(&ar->rx_refill_work, ar5523_rx_refill_work);
-
 	INIT_LIST_HEAD(&ar->rx_data_free);
 	INIT_LIST_HEAD(&ar->rx_data_used);
 	spin_lock_init(&ar->rx_data_list_lock);
