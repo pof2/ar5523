@@ -34,9 +34,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define AR5523_CONFIG_NO		1
-#define AR5523_IFACE_INDEX	0
-
 /* all fields are big endian */
 struct ar5523_fwblock {
 	__be32		flags;
@@ -49,7 +46,7 @@ struct ar5523_fwblock {
 	__be32		remain;
 	__be32		rxtotal;
 	__be32		pad[123];
-};
+} __packed;
 
 #define AR5523_MAX_RXCMDSZ	1024
 #define AR5523_MAX_TXCMDSZ	1024
@@ -119,11 +116,6 @@ struct ar5523_cmd_hdr {
 #define	WDCMSG_RELEASE_TX_QUEUE		0x3b
 #define	WDCMSG_SET_DEFAULT_KEY		0x43
 
-
-/* TODO: OLD commands: REMOVE! */
-#define AR5523_CMD_SET_QUEUE	0x3a
-#define AR5523_CMD_RESET_QUEUE	0x3b
-
 	__u32		priv;	/* driver private data,
 				   don't care about endianess */
 	__be32		magic;
@@ -142,7 +134,6 @@ struct uath_cmd_host_available {
 #define	ATH_SW_VER_PATCH	0
 #define	ATH_SW_VER_BUILD	9999
 
-
 struct ar5523_chunk {
 	u8		seqnum;		/* sequence number for ordering */
 	u8		flags;
@@ -152,7 +143,6 @@ struct ar5523_chunk {
 	__be16		length;		/* chunk size in bytes */
 	/* chunk data follows */
 } __packed;
-
 
 /*
  * Message format for a WDCMSG_DATA_AVAIL message from Target to Host.
@@ -313,7 +303,7 @@ struct ar5523_qinfo {
 	__be32		acm;
 	__be32		magic1;
 	__be32		magic2;
-};
+} __packed;
 
 struct ar5523_cmd_rx_filter {		/* WDCMSG_RX_FILTER */
 	__be32	bits;
@@ -424,7 +414,6 @@ enum {
 	CAP_TWICE_ANTENNAGAIN_2G,
 };
 
-
 enum {
 	ST_NONE,                    /* Sentinal to indicate "no status" */
 	ST_ALL,
@@ -452,9 +441,6 @@ enum {
 	TARGET_DEVICE_SUSPEND,
 	TARGET_DEVICE_RESUME,
 };
-
-#define AR5523_MAX_TXBUFSZ	\
-	(sizeof(__be32) + sizeof(struct ar5523_tx_desc) + IEEE80211_MAX_LEN)
 
 /* this is in net/ieee80211.h, but that conflicts with the mac80211 headers */
 #define IEEE80211_2ADDR_LEN	16

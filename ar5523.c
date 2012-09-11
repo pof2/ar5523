@@ -592,7 +592,7 @@ static int ar5523_reset_tx_queues(struct ar5523 *ar)
 
 		ar5523_dbg(ar, "resetting Tx queue %d\n", AR5523_AC_TO_QID(ac));
 
-		error = ar5523_cmd_write(ar, AR5523_CMD_RESET_QUEUE,
+		error = ar5523_cmd_write(ar, WDCMSG_RELEASE_TX_QUEUE,
 					 &qid, sizeof(qid), 0);
 		if (error)
 			break;
@@ -650,7 +650,7 @@ static int ar5523_wme_init(struct ar5523 *ar)
 		ar5523_dbg(ar, "setting up Tx queue %d\n",
 			       AR5523_AC_TO_QID(ac));
 
-		error = ar5523_cmd_write(ar, AR5523_CMD_SET_QUEUE,
+		error = ar5523_cmd_write(ar, WDCMSG_SETUP_TX_QUEUE,
 					 &qinfo, sizeof(qinfo), 0);
 		if (error)
 			break;
