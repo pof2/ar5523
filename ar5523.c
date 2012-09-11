@@ -160,7 +160,6 @@ struct ar5523 {
 	struct list_head	rx_data_used;
 	atomic_t		rx_data_free_cnt;
 
-	struct completion	ready;
 	struct work_struct	rx_refill_work;
 
 	int			rxbufsz;
@@ -1658,7 +1657,6 @@ static int ar5523_probe(struct usb_interface *intf,
 	ar->hw = hw;
 	ar->dev = dev;
 	mutex_init(&ar->mutex);
-	init_completion(&ar->ready);
 
 	INIT_LIST_HEAD(&ar->tx_data_list);
 	spin_lock_init(&ar->tx_data_list_lock);
