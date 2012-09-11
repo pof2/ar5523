@@ -621,6 +621,22 @@ static int ar5523_set_chan(struct ar5523 *ar)
 	return ar5523_cmd_write(ar, WDCMSG_RESET, &reset, sizeof(reset), 0);
 }
 
+static inline int ar5523_tx_get_queue(int queue)
+{
+	switch (queue) {
+	case 0:
+		return 3; /* AC_VO */
+	case 1:
+		return 2; /* AC_VI */
+	case 2:
+		return 1; /* AC_BE */
+	case 3:
+		return 0; /* AC_BK */
+	default:
+		return 1; /* AC_BE */
+	}
+}
+
 static int ar5523_wme_init(struct ar5523 *ar)
 {
 	struct ar5523_qinfo qinfo;
@@ -1048,6 +1064,8 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	ar5523_dbg(ar, "tx called\n");
 
+	txqid = ar5523_tx_get_queue(skb_get_queue_mapping(skb));
+
 	if (atomic_read(&ar->tx_data_queued) >= (AR5523_TX_DATA_COUNT-1)) {
 		ar5523_dbg(ar, "tx queue full\n");
 		if (!test_and_set_bit(AR5523_TX_QUEUE_STOPPED, &ar->flags)) {
@@ -1062,8 +1080,10 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	}
 
 	urb = usb_alloc_urb(0, GFP_ATOMIC);
-	if (!urb)
+	if (!urb) {
+		ar5523_err(ar, "Failed to allocate TX urb\n");
 		goto out_free_skb;
+	}
 
 	data->ar = ar;
 	data->urb = urb;
@@ -1088,7 +1108,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (txi->flags & IEEE80211_TX_CTL_USE_MINRATE)
 		txqid |= UATH_TXQID_MINRATE;
 
-	desc->txqid = cpu_to_be32(1);
+	desc->txqid = cpu_to_be32(txqid);
 
 	usb_fill_bulk_urb(urb, ar->dev, ar5523_data_tx_pipe(ar->dev),
 			  skb->data, skb->len, ar5523_data_tx_cb, skb);
@@ -1113,7 +1133,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 out_free_urb:
 	usb_free_urb(urb);
 out_free_skb:
-	kfree_skb(skb);
+	ieee80211_free_txskb(hw, skb);
 	return;
 }
 
@@ -1728,7 +1748,7 @@ static int ar5523_probe(struct usb_interface *intf,
 		    IEEE80211_HW_HAS_RATE_CONTROL;
 	hw->extra_tx_headroom = sizeof(struct ar5523_tx_desc) + sizeof(__be32);
 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
-	hw->queues = 1;
+	hw->queues = 4;
 
 	error = ar5523_init_modes(ar);
 	if (error)
