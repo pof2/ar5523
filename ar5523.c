@@ -88,7 +88,6 @@ enum {
 	usb_rcvbulkpipe((dev), AR5523_DATA_RX_PIPE)
 
 enum {
-	/* XXX: msec or HZ? */
 	AR5523_DATA_TIMEOUT		= 10000,
 	AR5523_CMD_TIMEOUT		= 1000,
 };
