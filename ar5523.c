@@ -621,22 +621,6 @@ static int ar5523_set_chan(struct ar5523 *ar)
 	return ar5523_cmd_write(ar, WDCMSG_RESET, &reset, sizeof(reset), 0);
 }
 
-static inline int ar5523_tx_get_queue(int queue)
-{
-	switch (queue) {
-	case 0:
-		return 3; /* AC_VO */
-	case 1:
-		return 2; /* AC_VI */
-	case 2:
-		return 1; /* AC_BE */
-	case 3:
-		return 0; /* AC_BK */
-	default:
-		return 1; /* AC_BE */
-	}
-}
-
 static int ar5523_wme_init(struct ar5523 *ar)
 {
 	struct ar5523_qinfo qinfo;
@@ -1064,7 +1048,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	ar5523_dbg(ar, "tx called\n");
 
-	txqid = ar5523_tx_get_queue(skb_get_queue_mapping(skb));
+	txqid = 1;
 
 	if (atomic_read(&ar->tx_data_queued) >= (AR5523_TX_DATA_COUNT-1)) {
 		ar5523_dbg(ar, "tx queue full\n");
@@ -1748,7 +1732,7 @@ static int ar5523_probe(struct usb_interface *intf,
 		    IEEE80211_HW_HAS_RATE_CONTROL;
 	hw->extra_tx_headroom = sizeof(struct ar5523_tx_desc) + sizeof(__be32);
 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
-	hw->queues = 4;
+	hw->queues = 1;
 
 	error = ar5523_init_modes(ar);
 	if (error)
