@@ -976,9 +976,9 @@ static void ar5523_tx_work(struct work_struct *work)
 		desc->flags  = 0;
 
 		if (test_bit(AR5523_CONNECTED, &ar->flags))
-			desc->connid  = cpu_to_be32(AR5523_ID_BROADCAST);
+			desc->connid = cpu_to_be32(AR5523_ID_BSS);
 		else
-			desc->connid  = cpu_to_be32(AR5523_ID_BSS);
+			desc->connid = cpu_to_be32(AR5523_ID_BROADCAST);
 
 		if (txi->flags & IEEE80211_TX_CTL_USE_MINRATE)
 			txqid |= UATH_TXQID_MINRATE;
