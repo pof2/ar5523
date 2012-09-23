@@ -51,8 +51,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/list.h>
-#include <linux/etherdevice.h>
-#include <linux/netdevice.h>
 #include <linux/completion.h>
 #include <linux/firmware.h>
 #include <linux/skbuff.h>
@@ -93,8 +91,6 @@ enum {
 };
 
 enum {
-	AR5523_TX_CMD_COUNT	= 2,
-
 	AR5523_TX_DATA_COUNT	= 16,
 	AR5523_TX_DATA_RESTART_COUNT = 4,
 	AR5523_RX_DATA_COUNT	= 16,
@@ -119,12 +115,6 @@ struct ar5523_tx_cmd {
 	int			flags;
 	int			res;
 	struct completion	done;
-};
-
-struct ar5523_rx_cmd {
-	struct ar5523		*ar;
-	struct urb		*urb;
-	void			*buf;
 };
 
 struct ar5523_tx_data {
@@ -1008,7 +998,8 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 
 		error = usb_submit_urb(urb, GFP_KERNEL);
 		if (error) {
-			ar5523_err(ar, "error %d when submitting tx urb\n", error);
+			ar5523_err(ar, "error %d when submitting tx urb\n",
+				   error);
 			spin_lock_irqsave(&ar->tx_data_list_lock, flags);
 			list_del(&data->list);
 			spin_unlock_irqrestore(&ar->tx_data_list_lock, flags);
@@ -1201,20 +1192,21 @@ static int ar5523_hwconfig(struct ieee80211_hw *hw, u32 changed)
 		ar5523_flush_tx(ar);
 		error = ar5523_set_chan(ar);
 		if (error) {
-			ar5523_err(ar, "could not reset Tx queues, error %d\n", error);
+			ar5523_err(ar, "could not set chan, error %d\n", error);
 			goto out_unlock;
 		}
 
 		/* reset Tx rings */
 		error = ar5523_reset_tx_queues(ar);
 		if (error) {
-			ar5523_err(ar, "could not reset Tx queues, error %d\n", error);
+			ar5523_err(ar, "could not reset Tx queues, error %d\n",
+				   error);
 			goto out_unlock;
 		}
 		/* set Tx rings WME properties */
 		error = ar5523_wme_init(ar);
 		if (error)
-			ar5523_err(ar, "could not init Tx queues, error %d\n", error);
+			ar5523_err(ar, "could not init wme, error %d\n", error);
 
 	}
 out_unlock:
