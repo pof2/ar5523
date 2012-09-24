@@ -175,8 +175,6 @@ struct ar5523_rx_desc {
 	__be32	pad;		/* XXX? */
 } __packed;
 
-#define AR5523_MAKECTL(qid, len)	cpu_to_be32((qid) << 16 | (len))
-
 struct ar5523_tx_desc {
 	__be32	msglen;
 	__be32	msgid;		/* msg id (supplied by host) */

@@ -925,11 +925,11 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 {
 	struct ar5523_tx_data *data;
 	struct ar5523_tx_desc *desc;
+	struct ar5523_chunk *chunk;
 	struct ieee80211_tx_info *txi;
 	struct urb *urb;
 	struct sk_buff *skb;
 	int error = 0, paylen;
-	__be32 *hdr;
 	u32 txqid;
 	unsigned long flags;
 
@@ -963,10 +963,11 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 		data->urb = urb;
 
 		desc = (struct ar5523_tx_desc *)skb_push(skb, sizeof(*desc));
-		hdr = (__be32 *)skb_push(skb, sizeof(__be32));
+		chunk = (struct ar5523_chunk *)skb_push(skb, sizeof(*chunk));
 
-		/* fill Tx descriptor */
-		*hdr = AR5523_MAKECTL(1, skb->len - sizeof(__be32));
+		chunk->seqnum = 0;
+		chunk->flags = UATH_CFLAGS_FINAL;
+		chunk->length = cpu_to_be16(skb->len);
 
 		desc->msglen = cpu_to_be32(skb->len);
 		desc->msgid  = AR5523_DATA_ID;
