@@ -595,9 +595,9 @@ static int ar5523_reset_tx_queues(struct ar5523 *ar)
 	int ac, error;
 
 	for (ac = 0; ac < 4; ac++) {
-		const __be32 qid = cpu_to_be32(AR5523_AC_TO_QID(ac));
+		const __be32 qid = cpu_to_be32(ac);
 
-		ar5523_dbg(ar, "resetting Tx queue %d\n", AR5523_AC_TO_QID(ac));
+		ar5523_dbg(ar, "resetting Tx queue %d\n", ac);
 
 		error = ar5523_cmd_write(ar, WDCMSG_RELEASE_TX_QUEUE,
 					 &qid, sizeof(qid), 0);
@@ -630,39 +630,33 @@ static int ar5523_set_chan(struct ar5523 *ar)
 
 static int ar5523_wme_init(struct ar5523 *ar)
 {
-	struct ar5523_qinfo qinfo;
-	int ac, error;
-	static const struct ar5523_wme_settings uath_wme_11g[] = {
+	static const struct ar5523_wme_settings uath_wme_11g[4] = {
 		{ 7, 4, 10,  0, 0 },	/* Background */
 		{ 3, 4, 10,  0, 0 },	/* Best-Effort */
 		{ 3, 3,  4, 26, 0 },	/* Video */
-		{ 2, 2,  3, 47, 0 },	/* Voice */
+		{ 2, 2,  3, 47, 0 }	/* Voice */
 	};
+	struct uath_cmd_txq_setup qinfo;
+	int ac, error;
 
-	memset(&qinfo, 0, sizeof(qinfo));
-	qinfo.size   = cpu_to_be32(32);
-	qinfo.magic1 = cpu_to_be32(1);      /* XXX ack policy? */
-	qinfo.magic2 = cpu_to_be32(1);
-
+	ar5523_dbg(ar, "setting up Tx queues\n");
 	for (ac = 0; ac < 4; ac++) {
-		qinfo.qid      = cpu_to_be32(AR5523_AC_TO_QID(ac));
-		qinfo.ac       = cpu_to_be32(ac);
-		qinfo.aifsn    = cpu_to_be32(uath_wme_11g[ac].aifsn);
-		qinfo.logcwmin = cpu_to_be32(uath_wme_11g[ac].logcwmin);
-		qinfo.logcwmax = cpu_to_be32(uath_wme_11g[ac].logcwmax);
-		qinfo.txop     = cpu_to_be32(AR5523_TXOP_TO_US(
-						uath_wme_11g[ac].txop));
-		qinfo.acm      = cpu_to_be32(uath_wme_11g[ac].acm);
-
-		ar5523_dbg(ar, "setting up Tx queue %d\n",
-			       AR5523_AC_TO_QID(ac));
+		qinfo.qid	     = cpu_to_be32(ac);
+		qinfo.len	     = cpu_to_be32(sizeof(qinfo.attr));
+		qinfo.attr.priority  = cpu_to_be32(ac);	/* XXX */
+		qinfo.attr.aifs	     = cpu_to_be32(uath_wme_11g[ac].aifsn);
+		qinfo.attr.logcwmin  = cpu_to_be32(uath_wme_11g[ac].logcwmin);
+		qinfo.attr.logcwmax  = cpu_to_be32(uath_wme_11g[ac].logcwmax);
+		qinfo.attr.bursttime = cpu_to_be32(AR5523_TXOP_TO_US(
+					    uath_wme_11g[ac].txop));
+		qinfo.attr.mode	     = cpu_to_be32(uath_wme_11g[ac].acm);/*X?*/
+		qinfo.attr.qflags    = cpu_to_be32(1);	/* XXX? */
 
 		error = ar5523_cmd_write(ar, WDCMSG_SETUP_TX_QUEUE,
 					 &qinfo, sizeof(qinfo), 0);
-		if (error)
+		if (error != 0)
 			break;
 	}
-
 	return error;
 }
 

@@ -287,21 +287,23 @@ struct uath_cmd_ledstate {		/* WDCMSG_SET_LED_STATE */
 	__be32	connected;
 } __packed;
 
-/* structure for command AR5523_CMD_SET_QUEUE */
-struct ar5523_qinfo {
-	__be32		qid;
-#define AR5523_AC_TO_QID(ac)	(ac)	/* id function */
 
-	__be32		size;
-	__be32		ac;
-	__be32		aifsn;
-	__be32		logcwmin;
-	__be32		logcwmax;
-	__be32		txop;
-	__be32		acm;
-	__be32		magic1;
-	__be32		magic2;
+struct uath_cmd_txq_attr {
+	__be32	priority;
+	__be32	aifs;
+	__be32	logcwmin;
+	__be32	logcwmax;
+	__be32	bursttime;
+	__be32	mode;
+	__be32	qflags;
 } __packed;
+
+struct uath_cmd_txq_setup {		/* WDCMSG_SETUP_TX_QUEUE */
+	__be32	qid;
+	__be32	len;
+	struct uath_cmd_txq_attr attr;
+} __packed;
+
 
 struct ar5523_cmd_rx_filter {		/* WDCMSG_RX_FILTER */
 	__be32	bits;
