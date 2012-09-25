@@ -865,17 +865,14 @@ static void ar5523_data_tx_cb(struct urb *urb)
 	struct ar5523 *ar = data->ar;
 	unsigned long flags;
 
-	ar5523_dbg(ar, "data tx urb completed %p\n", data->urb);
+	ar5523_dbg(ar, "data tx urb completed: %d\n", urb->status);
 
 	spin_lock_irqsave(&ar->tx_data_list_lock, flags);
 	list_del(&data->list);
 	spin_unlock_irqrestore(&ar->tx_data_list_lock, flags);
 
-	/* sync/async unlink faults aren't errors */
-	if (urb->status && (urb->status != -ENOENT &&
-	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
-		ar5523_dbg(ar, "%s: nonzero write bulk status received: %d\n",
-			   __func__, urb->status);
+	if (urb->status) {
+		ar5523_dbg(ar, "%s: urb status: %d\n", __func__, urb->status);
 		ar5523_data_tx_pkt_put(ar);
 		ieee80211_free_txskb(ar->hw, skb);
 	}
