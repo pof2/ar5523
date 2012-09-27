@@ -763,8 +763,18 @@ static void ar5523_rx_refill_work(struct work_struct *work)
 	unsigned long flags;
 	int error;
 
-	while (!list_empty(&ar->rx_data_free)) {
-		data = (struct ar5523_rx_data *) ar->rx_data_free.next;
+	ar5523_dbg(ar, "%s\n", __func__);
+	do {
+		spin_lock_irqsave(&ar->rx_data_list_lock, flags);
+
+		if (!list_empty(&ar->rx_data_free))
+			data = (struct ar5523_rx_data *) ar->rx_data_free.next;
+		else
+			data = NULL;
+		spin_unlock_irqrestore(&ar->rx_data_list_lock, flags);
+
+		if (!data)
+			goto done;
 
 		data->skb = alloc_skb(ar->rxbufsz, GFP_KERNEL);
 		if (!data->skb) {
@@ -775,7 +785,6 @@ static void ar5523_rx_refill_work(struct work_struct *work)
 		usb_fill_bulk_urb(data->urb, ar->dev,
 				  ar5523_data_rx_pipe(ar->dev), data->skb->data,
 				  ar->rxbufsz, ar5523_data_rx_cb, data);
-
 
 		error = usb_submit_urb(data->urb, GFP_KERNEL);
 		if (error) {
@@ -789,7 +798,9 @@ static void ar5523_rx_refill_work(struct work_struct *work)
 		list_move(&data->list, &ar->rx_data_used);
 		spin_unlock_irqrestore(&ar->rx_data_list_lock, flags);
 		atomic_dec(&ar->rx_data_free_cnt);
-	}
+	} while (true);
+done:
+	return;
 }
 
 static void ar5523_cancel_rx_bufs(struct ar5523 *ar)
