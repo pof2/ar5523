@@ -68,7 +68,7 @@ enum {
 	AR5523_FLAG_ABG			= (1 << 1),
 };
 
-#define AR5523_FIRMWARE_FILE	"uath-ar5523.bin"
+#define AR5523_FIRMWARE_FILE	"ar5523.bin"
 
 enum {
 	AR5523_CMD_TX_PIPE	= 0x01,
