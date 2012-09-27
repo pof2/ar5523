@@ -116,6 +116,9 @@ struct ar5523_tx_cmd {
 	struct completion	done;
 };
 
+/* This struct is placed in tx_info->driver_data. It must not be larger
+ *  than IEEE80211_TX_INFO_DRIVER_DATA_SIZE.
+ */
 struct ar5523_tx_data {
 	struct list_head	list;
 	struct ar5523		*ar;
@@ -919,6 +922,7 @@ static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	list_add_tail(&data->list, &ar->tx_queue_pending);
 	spin_unlock_irqrestore(&ar->tx_data_list_lock, flags);
 
+
 	ieee80211_queue_work(ar->hw, &ar->tx_work);
 }
 
@@ -933,6 +937,9 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 	int error = 0, paylen;
 	u32 txqid;
 	unsigned long flags;
+
+	BUILD_BUG_ON(sizeof(struct ar5523_tx_data) >
+		     IEEE80211_TX_INFO_DRIVER_DATA_SIZE);
 
 	ar5523_dbg(ar, "%s\n", __func__);
 	do {
