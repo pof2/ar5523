@@ -774,15 +774,23 @@ done:
 static void ar5523_cancel_rx_bufs(struct ar5523 *ar)
 {
 	struct ar5523_rx_data *data;
+	unsigned long flags;
 
-	while (!list_empty(&ar->rx_data_used)) {
-		data = (struct ar5523_rx_data *) ar->rx_data_used.next;
+	do {
+		spin_lock_irqsave(&ar->rx_data_list_lock, flags);
+		if (!list_empty(&ar->rx_data_used))
+			data = (struct ar5523_rx_data *) ar->rx_data_used.next;
+		else
+			data = NULL;
+		spin_unlock_irqrestore(&ar->rx_data_list_lock, flags);
+
+		if (!data)
+			break;
+
 		usb_kill_urb(data->urb);
-		kfree_skb(data->skb);
-		data->skb = NULL;
 		list_move(&data->list, &ar->rx_data_free);
 		atomic_inc(&ar->rx_data_free_cnt);
-	}
+	} while (data);
 }
 
 static void ar5523_free_rx_bufs(struct ar5523 *ar)
