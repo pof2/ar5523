@@ -248,22 +248,15 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
 	struct ar5523_cmd_hdr *hdr = ar->rx_cmd_buf;
 	int dlen;
 
-	/* sync/async unlink faults aren't errors */
-	if (urb->status && (urb->status != -ENOENT &&
-	    urb->status != -ECONNRESET && urb->status != -ESHUTDOWN)) {
-		ar5523_dbg(ar, "nonzero write bulk status received: %d\n",
-			   urb->status);
-		return;
-	}
-
 	if (urb->status) {
-		ar5523_err(ar, "RX USB error %d.\n", urb->status);
-		return;
+		if (urb->status != -ESHUTDOWN)
+			ar5523_err(ar, "RX USB error %d.\n", urb->status);
+		goto skip;
 	}
 
 	if (urb->actual_length < sizeof(struct ar5523_cmd_hdr)) {
 		ar5523_err(ar, "RX USB to short.\n");
-		return;
+		goto skip;
 	}
 
 	ar5523_dbg(ar, "%s code %02x priv %d\n", __func__,
@@ -354,8 +347,9 @@ static int ar5523_submit_rx_cmd(struct ar5523 *ar)
 
 	error = usb_submit_urb(ar->rx_cmd_urb, GFP_ATOMIC);
 	if (error) {
-		ar5523_err(ar, "error %d when submitting rx urb\n",
-			       error);
+		if (error != -ENODEV)
+			ar5523_err(ar, "error %d when submitting rx urb\n",
+				   error);
 		return error;
 	}
 	return 0;
@@ -654,8 +648,9 @@ static void ar5523_data_rx_cb(struct urb *urb)
 	ar5523_dbg(ar, "%s\n", __func__);
 	/* sync/async unlink faults aren't errors */
 	if (urb->status) {
-		ar5523_dbg(ar, "%s: USB err: %d\n",
-			   __func__, urb->status);
+		if (urb->status != -ESHUTDOWN)
+			ar5523_err(ar, "%s: USB err: %d\n", __func__,
+				   urb->status);
 		goto skip;
 	}
 
@@ -767,8 +762,9 @@ static void ar5523_rx_refill_work(struct work_struct *work)
 		error = usb_submit_urb(data->urb, GFP_KERNEL);
 		if (error) {
 			kfree_skb(data->skb);
-			ar5523_err(ar, "error %d when submitting rx data urb\n",
-				       error);
+			if (error != -ENODEV)
+				ar5523_err(ar, "Err sending rx data urb %d\n",
+					   error);
 			return;
 		}
 
@@ -1798,7 +1794,7 @@ static void ar5523_disconnect(struct usb_interface *intf)
 	struct ieee80211_hw *hw = usb_get_intfdata(intf);
 	struct ar5523 *ar = hw->priv;
 
-	ar5523_info(ar, "USB detach\n");
+	ar5523_dbg(ar, "detaching\n");
 	set_bit(AR5523_USB_DISCONNECTED, &ar->flags);
 
 	ieee80211_unregister_hw(hw);
