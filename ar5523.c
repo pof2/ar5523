@@ -102,6 +102,7 @@ enum {
 
 enum AR5523_flags {
 	AR5523_HW_UP,
+	AR5523_USB_DISCONNECTED,
 	AR5523_CONNECTED
 };
 
@@ -183,7 +184,11 @@ enum {
 #define ar5523_dbg(ar, format, arg...) \
 	dev_dbg(&(ar)->dev->dev, format, ## arg)
 #define ar5523_err(ar, format, arg...) \
-	dev_err(&(ar)->dev->dev, format, ## arg)
+do { \
+	if (!test_bit(AR5523_USB_DISCONNECTED, &ar->flags)) { \
+		dev_err(&(ar)->dev->dev, format, ## arg); \
+	} \
+} while (0)
 #define ar5523_info(ar, format, arg...)	\
 	dev_info(&(ar)->dev->dev, format, ## arg)
 
@@ -999,6 +1004,9 @@ static void ar5523_flush_tx(struct ar5523 *ar)
 {
 	ar5523_tx_work_locked(ar);
 
+	/* Don't waste time trying to flush if USB is disconnected */
+	if (test_bit(AR5523_USB_DISCONNECTED, &ar->flags))
+		return;
 	if (!wait_event_timeout(ar->tx_flush_waitq,
 	    !atomic_read(&ar->tx_nr_pending), HZ * 3))
 		ar5523_err(ar, "flush timeout (tot %d pend %d)\n",
@@ -1768,6 +1776,7 @@ static int ar5523_probe(struct usb_interface *intf,
 		goto out_cancel_rx_cmd;
 	}
 
+	ar5523_info(ar, "Found and initialized AR5523 device\n");
 	return 0;
 
 out_cancel_rx_cmd:
@@ -1789,7 +1798,8 @@ static void ar5523_disconnect(struct usb_interface *intf)
 	struct ieee80211_hw *hw = usb_get_intfdata(intf);
 	struct ar5523 *ar = hw->priv;
 
-	ar5523_dbg(ar, "detaching\n");
+	ar5523_info(ar, "USB detach\n");
+	set_bit(AR5523_USB_DISCONNECTED, &ar->flags);
 
 	ieee80211_unregister_hw(hw);
 
