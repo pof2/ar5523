@@ -276,7 +276,10 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
 	case WDCMSG_SEND_COMPLETE:
 		ar5523_dbg(ar, "WDCMSG_SEND_COMPLETE: %d pending\n", 
 			atomic_read(&ar->tx_nr_pending));
-		ar5523_data_tx_pkt_put(ar);
+		if (!test_bit(AR5523_HW_UP, &ar->flags))
+			ar5523_dbg(ar, "Unexpected WDCMSG_SEND_COMPLETE\n");
+		else
+			ar5523_data_tx_pkt_put(ar);
 		break;
 
 	case WDCMSG_TARGET_START:
