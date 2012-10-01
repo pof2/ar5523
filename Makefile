@@ -9,7 +9,7 @@ CONFIG_AR5523		?= m
 obj-$(CONFIG_AR5523)	+= ar5523.o
 
 all:
-	$(MAKE) -C $(KSRC) SUBDIRS=$(PWD) modules
+	$(MAKE) -C $(KSRC) SUBDIRS=$(PWD) modules W=1 C=1
 
 clean:
 	rm -rf	*.ko *.mod.* *.o .*.o.d .*.cmd .tmp_versions Module.symvers \
