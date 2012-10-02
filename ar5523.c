@@ -690,13 +690,12 @@ static void ar5523_data_rx_cb(struct urb *urb)
 
 	chunk = (struct ar5523_chunk *) data->skb->data;
 
-	if (chunk->flags != UATH_CFLAGS_FINAL)
-		ar5523_dbg(ar, "chunk seq: %d flags: %02x len: %d\n",
+	if (((chunk->flags & UATH_CFLAGS_FINAL) == 0 ) ||
+		chunk->seqnum != 0) {
+		ar5523_err(ar, "RX: No final flag "
+			   "seq: %d flags: %02x len: %d\n",
 			   chunk->seqnum, chunk->flags,
 			   be16_to_cpu(chunk->length));
-
-	if ((chunk->flags & UATH_CFLAGS_FINAL) == 0) {
-		ar5523_err(ar, "RX: No final flag\n");
 		goto skip;
 	}
 
