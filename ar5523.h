@@ -122,7 +122,7 @@ struct ar5523_cmd_hdr {
 	__be32		reserved2[4];
 };
 
-struct uath_cmd_host_available {
+struct ar5523_cmd_host_available {
 	__be32	sw_ver_major;
 	__be32	sw_ver_minor;
 	__be32	sw_ver_patch;
@@ -267,7 +267,7 @@ struct ar5523_cmd_create_connection {
 	struct ar5523_cmd_connection_attr	connattr;
 } __packed;
 
-struct uath_cmd_ledsteady {		/* WDCMSG_SET_LED_STEADY */
+struct ar5523_cmd_ledsteady {		/* WDCMSG_SET_LED_STEADY */
 	__be32	lednum;
 #define UATH_LED_LINK		0
 #define UATH_LED_ACTIVITY	1
@@ -276,19 +276,19 @@ struct uath_cmd_ledsteady {		/* WDCMSG_SET_LED_STEADY */
 #define UATH_LED_ON	1
 } __packed;
 
-struct uath_cmd_ledblink {		/* WDCMSG_SET_LED_BLINK */
+struct ar5523_cmd_ledblink {		/* WDCMSG_SET_LED_BLINK */
 	__be32	lednum;
 	__be32	ledmode;
 	__be32	blinkrate;
 	__be32	slowmode;
 } __packed;
 
-struct uath_cmd_ledstate {		/* WDCMSG_SET_LED_STATE */
+struct ar5523_cmd_ledstate {		/* WDCMSG_SET_LED_STATE */
 	__be32	connected;
 } __packed;
 
 
-struct uath_cmd_txq_attr {
+struct ar5523_cmd_txq_attr {
 	__be32	priority;
 	__be32	aifs;
 	__be32	logcwmin;
@@ -298,10 +298,10 @@ struct uath_cmd_txq_attr {
 	__be32	qflags;
 } __packed;
 
-struct uath_cmd_txq_setup {		/* WDCMSG_SETUP_TX_QUEUE */
+struct ar5523_cmd_txq_setup {		/* WDCMSG_SETUP_TX_QUEUE */
 	__be32	qid;
 	__be32	len;
-	struct uath_cmd_txq_attr attr;
+	struct ar5523_cmd_txq_attr attr;
 } __packed;
 
 

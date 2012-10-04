@@ -570,7 +570,7 @@ static int ar5523_get_devcap(struct ar5523 *ar)
 
 static int ar5523_set_ledsteady(struct ar5523 *ar, int lednum, int ledmode)
 {
-	struct uath_cmd_ledsteady led;
+	struct ar5523_cmd_ledsteady led;
 
 	led.lednum = cpu_to_be32(lednum);
 	led.ledmode = cpu_to_be32(ledmode);
@@ -625,7 +625,7 @@ static int ar5523_set_chan(struct ar5523 *ar)
 
 static int ar5523_wme_init(struct ar5523 *ar)
 {
-	struct uath_cmd_txq_setup qinfo;
+	struct ar5523_cmd_txq_setup qinfo;
 
 	ar5523_dbg(ar, "setting up Tx queue\n");
 	qinfo.qid	     = cpu_to_be32(0);
@@ -1524,7 +1524,7 @@ static int ar5523_alloc_tx_cmd(struct ar5523 *ar)
 
 static int ar5523_host_available(struct ar5523 *ar)
 {
-	struct uath_cmd_host_available setup;
+	struct ar5523_cmd_host_available setup;
 
 	/* inform target the host is available */
 	setup.sw_ver_major = cpu_to_be32(ATH_SW_VER_MAJOR);
