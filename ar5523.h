@@ -201,7 +201,6 @@ struct ar5523_write_mac {
 	u8		data[32];
 } __packed;
 
-
 struct ar5523_cmd_rateset {
 	__u8		length;
 #define AR5523_MAX_NRATES	32
@@ -287,7 +286,6 @@ struct ar5523_cmd_ledstate {		/* WDCMSG_SET_LED_STATE */
 	__be32	connected;
 } __packed;
 
-
 struct ar5523_cmd_txq_attr {
 	__be32	priority;
 	__be32	aifs;
@@ -303,7 +301,6 @@ struct ar5523_cmd_txq_setup {		/* WDCMSG_SETUP_TX_QUEUE */
 	__be32	len;
 	struct ar5523_cmd_txq_attr attr;
 } __packed;
-
 
 struct ar5523_cmd_rx_filter {		/* WDCMSG_RX_FILTER */
 	__be32	bits;
@@ -444,15 +441,6 @@ enum {
 
 /* this is in net/ieee80211.h, but that conflicts with the mac80211 headers */
 #define IEEE80211_2ADDR_LEN	16
-
-/* from OpenBSD */
-#define IEEE80211_WEP_IVLEN			3	/* 24bit */
-#define IEEE80211_WEP_KIDLEN			1	/* 1 octet */
-#define IEEE80211_WEP_CRCLEN			4	/* CRC-32 */
-#define IEEE80211_CRC_LEN			4
-#define IEEE80211_MAX_LEN \
-	(2300 + IEEE80211_CRC_LEN + \
-	 (IEEE80211_WEP_IVLEN + IEEE80211_WEP_KIDLEN + IEEE80211_WEP_CRCLEN))
 
 #define AR5523_MIN_RXBUFSZ				\
 	(((sizeof(__be32) + IEEE80211_2ADDR_LEN +	\

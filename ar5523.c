@@ -177,7 +177,6 @@ struct ar5523 {
 };
 
 /* flags for sending firmware commands */
-#define AR5523_CMD_FLAG_ASYNC	(1 << 0)
 #define AR5523_CMD_FLAG_READ	(1 << 1)
 #define AR5523_CMD_FLAG_MAGIC	(1 << 2)
 
@@ -195,9 +194,6 @@ do { \
 static int ar5523_submit_rx_cmd(struct ar5523 *ar);
 static void ar5523_data_tx_pkt_put(struct ar5523 *ar);
 
-/*
- * TX/RX command handling.
- */
 static void ar5523_read_reply(struct ar5523 *ar, struct ar5523_cmd_hdr *hdr,
 			      struct ar5523_tx_cmd *cmd)
 {
@@ -332,7 +328,6 @@ static int ar5523_alloc_rx_cmd(struct ar5523 *ar)
 		usb_free_urb(ar->rx_cmd_urb);
 		return -ENOMEM;
 	}
-
 	return 0;
 }
 
@@ -432,7 +427,6 @@ static int ar5523_cmd(struct ar5523 *ar, u32 code, const void *idata,
 			   code);
 		cmd->res = -ETIMEDOUT;
 	}
-
 	return cmd->res;
 }
 
@@ -564,10 +558,6 @@ static int ar5523_get_devcap(struct ar5523 *ar)
 	return 0;
 }
 
-/*
- * Helpers.
- */
-
 static int ar5523_set_ledsteady(struct ar5523 *ar, int lednum, int ledmode)
 {
 	struct ar5523_cmd_ledsteady led;
@@ -579,7 +569,7 @@ static int ar5523_set_ledsteady(struct ar5523 *ar, int lednum, int ledmode)
 		   (lednum == UATH_LED_LINK) ? "link" : "activity",
 		   ledmode ? "on" : "off");
 	return ar5523_cmd_write(ar, WDCMSG_SET_LED_STEADY, &led, sizeof(led),
-		0);
+				 0);
 }
 
 static int ar5523_set_rxfilter(struct ar5523 *ar, u32 bits, u32 op)
@@ -623,7 +613,7 @@ static int ar5523_set_chan(struct ar5523 *ar)
 	return ar5523_cmd_write(ar, WDCMSG_RESET, &reset, sizeof(reset), 0);
 }
 
-static int ar5523_wme_init(struct ar5523 *ar)
+static int ar5523_queue_init(struct ar5523 *ar)
 {
 	struct ar5523_cmd_txq_setup qinfo;
 
@@ -637,9 +627,8 @@ static int ar5523_wme_init(struct ar5523 *ar)
 	qinfo.attr.bursttime = cpu_to_be32(0);
 	qinfo.attr.mode	     = cpu_to_be32(0);
 	qinfo.attr.qflags    = cpu_to_be32(1);	/* XXX? */
-
-	return ar5523_cmd_write(ar, WDCMSG_SETUP_TX_QUEUE,
-				 &qinfo, sizeof(qinfo), 0);
+	return ar5523_cmd_write(ar, WDCMSG_SETUP_TX_QUEUE, &qinfo,
+				 sizeof(qinfo), 0);
 }
 
 static int ar5523_switch_chan(struct ar5523 *ar)
@@ -660,7 +649,7 @@ static int ar5523_switch_chan(struct ar5523 *ar)
 		goto out_err;
 	}
 	/* set Tx rings WME properties */
-	error = ar5523_wme_init(ar);
+	error = ar5523_queue_init(ar);
 	if (error)
 		ar5523_err(ar, "could not init wme, error %d\n", error);
 
@@ -870,7 +859,6 @@ static int ar5523_alloc_rx_bufs(struct ar5523 *ar)
 		list_add_tail(&data->list, &ar->rx_data_free);
 		atomic_inc(&ar->rx_data_free_cnt);
 	}
-
 	return 0;
 
 err:
@@ -916,7 +904,6 @@ static void ar5523_data_tx_cb(struct urb *urb)
 		skb_pull(skb, sizeof(struct ar5523_tx_desc) + sizeof(__be32));
 		ieee80211_tx_status_irqsafe(ar->hw, skb);
 	}
-
 	usb_free_urb(urb);
 }
 
@@ -1069,7 +1056,6 @@ static void ar5523_tx_wd_work(struct work_struct *work)
 
 	ar5523_err(ar, "Will restart dongle.\n");
 	ar5523_cmd_write(ar, WDCMSG_TARGET_RESET, NULL, 0, 0);
-
 	mutex_unlock(&ar->mutex);
 }
 
@@ -1085,6 +1071,37 @@ static void ar5523_flush_tx(struct ar5523 *ar)
 		ar5523_err(ar, "flush timeout (tot %d pend %d)\n",
 			   atomic_read(&ar->tx_nr_total),
 			   atomic_read(&ar->tx_nr_pending));
+}
+
+static void ar5523_free_tx_cmd(struct ar5523 *ar)
+{
+	struct ar5523_tx_cmd *cmd = &ar->tx_cmd;
+
+	usb_free_coherent(ar->dev, AR5523_MAX_RXCMDSZ, cmd->buf_tx,
+			  cmd->urb_tx->transfer_dma);
+	usb_free_urb(cmd->urb_tx);
+}
+
+static int ar5523_alloc_tx_cmd(struct ar5523 *ar)
+{
+	struct ar5523_tx_cmd *cmd = &ar->tx_cmd;
+
+	cmd->ar = ar;
+	init_completion(&cmd->done);
+
+	cmd->urb_tx = usb_alloc_urb(0, GFP_KERNEL);
+	if (!cmd->urb_tx) {
+		ar5523_err(ar, "could not allocate urb\n");
+		return -ENOMEM;
+	}
+	cmd->buf_tx = usb_alloc_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
+					 GFP_KERNEL,
+					 &cmd->urb_tx->transfer_dma);
+	if (!cmd->buf_tx) {
+		usb_free_urb(cmd->urb_tx);
+		return -ENOMEM;
+	}
+	return 0;
 }
 
 /*
@@ -1167,9 +1184,9 @@ static int ar5523_start(struct ieee80211_hw *hw)
 	/* enable Rx */
 	ar5523_set_rxfilter(ar, 0, UATH_FILTER_OP_INIT);
 	ar5523_set_rxfilter(ar,
-	    UATH_FILTER_RX_UCAST | UATH_FILTER_RX_MCAST |
-	    UATH_FILTER_RX_BCAST | UATH_FILTER_RX_BEACON,
-	    UATH_FILTER_OP_SET);
+			    UATH_FILTER_RX_UCAST | UATH_FILTER_RX_MCAST |
+			    UATH_FILTER_RX_BCAST | UATH_FILTER_RX_BEACON,
+			    UATH_FILTER_OP_SET);
 
 	ar5523_set_ledsteady(ar, UATH_LED_ACTIVITY, UATH_LED_ON);
 	ar5523_dbg(ar, "start OK\n");
@@ -1242,7 +1259,6 @@ static int ar5523_add_interface(struct ieee80211_hw *hw,
 	default:
 		return -EOPNOTSUPP;
 	}
-
 	return 0;
 }
 
@@ -1259,8 +1275,8 @@ static int ar5523_hwconfig(struct ieee80211_hw *hw, u32 changed)
 {
 	struct ar5523 *ar = hw->priv;
 
-	mutex_lock(&ar->mutex);
 	ar5523_dbg(ar, "config called\n");
+	mutex_lock(&ar->mutex);
 	if (changed & IEEE80211_CONF_CHANGE_CHANNEL) {
 		ar5523_dbg(ar, "Do channel switch\n");
 		ar5523_flush_tx(ar);
@@ -1354,8 +1370,8 @@ static int ar5523_set_basic_rates(struct ar5523 *ar,
 	rates.size   = cpu_to_be32(sizeof(struct ar5523_cmd_rateset));
 	ar5523_create_rateset(ar, bss, &rates.rateset, true);
 
-	return ar5523_cmd_write(ar, WDCMSG_SET_BASIC_RATE,
-				&rates, sizeof(rates), 0);
+	return ar5523_cmd_write(ar, WDCMSG_SET_BASIC_RATE, &rates,
+				sizeof(rates), 0);
 }
 
 static int ar5523_create_connection(struct ar5523 *ar,
@@ -1403,7 +1419,6 @@ static void ar5523_bss_info_changed(struct ieee80211_hw *hw,
 	int error;
 
 	ar5523_dbg(ar, "bss_info_changed called\n");
-
 	mutex_lock(&ar->mutex);
 
 	if (!(changed & BSS_CHANGED_ASSOC))
@@ -1459,13 +1474,11 @@ static void ar5523_configure_filter(struct ieee80211_hw *hw,
 
 	ar5523_dbg(ar, "configure_filter called\n");
 	mutex_lock(&ar->mutex);
-
 	ar5523_flush_tx(ar);
 
 	*total_flags &= AR5523_SUPPORTED_FILTERS;
 
-	if (*total_flags & FIF_PROMISC_IN_BSS ||
-	    *total_flags & FIF_OTHER_BSS)
+	if (*total_flags & FIF_PROMISC_IN_BSS || *total_flags & FIF_OTHER_BSS)
 		filter |= UATH_FILTER_RX_PROM;
 
 	filter |= UATH_FILTER_RX_UCAST | UATH_FILTER_RX_MCAST |
@@ -1489,38 +1502,6 @@ static const struct ieee80211_ops ar5523_ops = {
 	.configure_filter	= ar5523_configure_filter,
 	.flush			= ar5523_flush,
 };
-
-static void ar5523_free_tx_cmd(struct ar5523 *ar)
-{
-	struct ar5523_tx_cmd *cmd = &ar->tx_cmd;
-
-	usb_free_coherent(ar->dev, AR5523_MAX_RXCMDSZ,
-			  cmd->buf_tx, cmd->urb_tx->transfer_dma);
-	usb_free_urb(cmd->urb_tx);
-}
-
-static int ar5523_alloc_tx_cmd(struct ar5523 *ar)
-{
-	struct ar5523_tx_cmd *cmd = &ar->tx_cmd;
-
-	cmd->ar = ar;
-	init_completion(&cmd->done);
-
-	cmd->urb_tx = usb_alloc_urb(0, GFP_KERNEL);
-	if (!cmd->urb_tx) {
-		ar5523_err(ar, "could not allocate urb\n");
-		return -ENOMEM;
-	}
-	cmd->buf_tx = usb_alloc_coherent(ar->dev, AR5523_MAX_TXCMDSZ,
-					 GFP_KERNEL,
-					 &cmd->urb_tx->transfer_dma);
-	if (!cmd->buf_tx) {
-		usb_free_urb(cmd->urb_tx);
-		return -ENOMEM;
-	}
-
-	return 0;
-}
 
 static int ar5523_host_available(struct ar5523 *ar)
 {
@@ -1555,7 +1536,6 @@ static int ar5523_get_devstatus(struct ar5523 *ar)
 		ar5523_err(ar, "could not read device serial number\n");
 		return error;
 	}
-
 	return 0;
 }
 
@@ -1582,7 +1562,7 @@ static int ar5523_get_max_rxsz(struct ar5523 *ar)
 		ar->rxbufsz = AR5523_SANE_RXBUFSZ;
 	}
 
-	ar5523_dbg(ar, "Mac RX buf size: %d\n", ar->rxbufsz);
+	ar5523_dbg(ar, "Max RX buf size: %d\n", ar->rxbufsz);
 	return 0;
 }
 
@@ -1636,7 +1616,6 @@ static int ar5523_init_modes(struct ar5523 *ar)
 	ar->band.bitrates = ar->rates;
 	ar->band.n_bitrates = ARRAY_SIZE(ar5523_rates);
 	ar->hw->wiphy->bands[IEEE80211_BAND_2GHZ] = &ar->band;
-
 	return 0;
 }
 
