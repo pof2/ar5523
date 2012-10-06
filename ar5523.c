@@ -907,7 +907,9 @@ static void ar5523_data_tx_cb(struct urb *urb)
 	usb_free_urb(urb);
 }
 
-static void ar5523_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
+static void ar5523_tx(struct ieee80211_hw *hw,
+		       struct ieee80211_tx_control *control,
+		       struct sk_buff *skb)
 {
 	struct ieee80211_tx_info *txi = IEEE80211_SKB_CB(skb);
 	struct ar5523_tx_data *data = (struct ar5523_tx_data *)
