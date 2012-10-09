@@ -85,8 +85,8 @@
 #define	AR5523_DATA_TIMEOUT	10000
 #define	AR5523_CMD_TIMEOUT	1000
 
-#define AR5523_TX_DATA_COUNT		16
-#define AR5523_TX_DATA_RESTART_COUNT	4
+#define AR5523_TX_DATA_COUNT		4
+#define AR5523_TX_DATA_RESTART_COUNT	1
 #define AR5523_RX_DATA_COUNT		16
 #define AR5523_RX_DATA_REFILL_COUNT	8
 
@@ -1011,6 +1011,8 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 		mod_timer(&ar->tx_wd_timer, jiffies + AR5523_TX_WD_TIMEOUT);
 		atomic_inc(&ar->tx_nr_pending);
 
+		ar5523_dbg(ar, "TX Frame (%d pending)\n",
+			   atomic_read(&ar->tx_nr_pending));
 		error = usb_submit_urb(urb, GFP_KERNEL);
 		if (error) {
 			ar5523_err(ar, "error %d when submitting tx urb\n",
@@ -1030,6 +1032,7 @@ static void ar5523_tx_work(struct work_struct *work)
 {
 	struct ar5523 *ar = container_of(work, struct ar5523, tx_work);
 
+	ar5523_dbg(ar, "%s\n", __func__);
 	mutex_lock(&ar->mutex);
 	ar5523_tx_work_locked(ar);
 	mutex_unlock(&ar->mutex);
