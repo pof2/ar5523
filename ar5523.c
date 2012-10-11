@@ -57,7 +57,7 @@
 #include <linux/usb.h>
 #include <net/mac80211.h>
 
-#include "ar5523.h"
+#include "ar5523_hw.h"
 
 /*
  * Various supported device vendors/products.
