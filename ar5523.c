@@ -154,7 +154,7 @@ static void ar5523_cmd_rx_cb(struct urb *urb)
 		break;
 
 	case WDCMSG_SEND_COMPLETE:
-		ar5523_dbg(ar, "WDCMSG_SEND_COMPLETE: %d pending\n", 
+		ar5523_dbg(ar, "WDCMSG_SEND_COMPLETE: %d pending\n",
 			atomic_read(&ar->tx_nr_pending));
 		if (!test_bit(AR5523_HW_UP, &ar->flags))
 			ar5523_dbg(ar, "Unexpected WDCMSG_SEND_COMPLETE\n");
@@ -568,10 +568,9 @@ static void ar5523_data_rx_cb(struct urb *urb)
 
 	chunk = (struct ar5523_chunk *) data->skb->data;
 
-	if (((chunk->flags & UATH_CFLAGS_FINAL) == 0 ) ||
+	if (((chunk->flags & UATH_CFLAGS_FINAL) == 0) ||
 		chunk->seqnum != 0) {
-		ar5523_dbg(ar, "RX: No final flag "
-			   "seq: %d flags: %02x len: %d\n",
+		ar5523_dbg(ar, "RX: No final flag. s: %d f: %02x l: %d\n",
 			   chunk->seqnum, chunk->flags,
 			   be16_to_cpu(chunk->length));
 		goto skip;
@@ -773,8 +772,7 @@ static void ar5523_data_tx_cb(struct urb *urb)
 		ar5523_dbg(ar, "%s: urb status: %d\n", __func__, urb->status);
 		ar5523_data_tx_pkt_put(ar);
 		ieee80211_free_txskb(ar->hw, skb);
-	}
-	else {
+	} else {
 		skb_pull(skb, sizeof(struct ar5523_tx_desc) + sizeof(__be32));
 		ieee80211_tx_status_irqsafe(ar->hw, skb);
 	}
@@ -831,8 +829,7 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 			data = (struct ar5523_tx_data *)
 				ar->tx_queue_pending.next;
 			list_del(&data->list);
-		}
-		else
+		} else
 			data = NULL;
 		spin_unlock_irqrestore(&ar->tx_data_list_lock, flags);
 
@@ -1703,7 +1700,7 @@ static int ar5523_probe(struct usb_interface *intf,
 	hw->flags = IEEE80211_HW_RX_INCLUDES_FCS |
 		    IEEE80211_HW_SIGNAL_DBM |
 		    IEEE80211_HW_HAS_RATE_CONTROL;
-	hw->extra_tx_headroom = sizeof(struct ar5523_tx_desc) + 
+	hw->extra_tx_headroom = sizeof(struct ar5523_tx_desc) +
 				sizeof(struct ar5523_chunk);
 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 	hw->queues = 1;

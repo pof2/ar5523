@@ -64,8 +64,8 @@
 #define AR5523_CMD_ID	1
 #define AR5523_DATA_ID	2
 
-#define AR5523_TX_WD_TIMEOUT	HZ*2
-#define AR5523_FLUSH_TIMEOUT	HZ*3
+#define AR5523_TX_WD_TIMEOUT	(HZ * 2)
+#define AR5523_FLUSH_TIMEOUT	(HZ * 3)
 
 enum AR5523_flags {
 	AR5523_HW_UP,
