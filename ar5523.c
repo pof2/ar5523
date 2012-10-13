@@ -602,11 +602,12 @@ static void ar5523_data_rx_cb(struct urb *urb)
 	skb_put(data->skb, rxlen - sizeof(struct ar5523_rx_desc));
 
 	hdrlen = ieee80211_get_hdrlen_from_skb(data->skb);
-	if (hdrlen & 3) {
+	if (!IS_ALIGNED(hdrlen, 4)) {
 		ar5523_dbg(ar, "eek, alignment workaround activated\n");
-		pad = hdrlen % 4;
+		pad = ALIGN(hdrlen, 4) - hdrlen;
 		memmove(data->skb->data + pad, data->skb->data, hdrlen);
 		skb_pull(data->skb, pad);
+		skb_put(data->skb, pad);
 	}
 
 	rx_status = IEEE80211_SKB_RXCB(data->skb);
