@@ -153,6 +153,11 @@ struct ar5523 {
 
 #define ar5523_dbg(ar, format, arg...) \
 	dev_dbg(&(ar)->dev->dev, format, ## arg)
+
+/* On USB hot-unplug there can be a lot of URBs in flight and they'll all
+ * fail. Instead of dealing with them in every possible place just surpress
+ * any messages on USB disconnect.
+ */
 #define ar5523_err(ar, format, arg...) \
 do { \
 	if (!test_bit(AR5523_USB_DISCONNECTED, &ar->flags)) { \
@@ -161,4 +166,3 @@ do { \
 } while (0)
 #define ar5523_info(ar, format, arg...)	\
 	dev_info(&(ar)->dev->dev, format, ## arg)
-
