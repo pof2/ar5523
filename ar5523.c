@@ -873,6 +873,14 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 
 		desc->txqid = cpu_to_be32(txqid);
 
+		/* If transfer size is a multiple of 512 bytes the FW's TX
+		 * queues gets stuck. Am I missing something or is this a
+		 * FW bug? Simply extending the transfer a few bytes solves
+		 * the problem.
+		 */
+		if (skb->len % 512 == 0)
+			skb_put(skb, 4);
+
 		usb_fill_bulk_urb(urb, ar->dev, ar5523_data_tx_pipe(ar->dev),
 				  skb->data, skb->len, ar5523_data_tx_cb, skb);
 
@@ -882,8 +890,8 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 		mod_timer(&ar->tx_wd_timer, jiffies + AR5523_TX_WD_TIMEOUT);
 		atomic_inc(&ar->tx_nr_pending);
 
-		ar5523_dbg(ar, "TX Frame (%d pending)\n",
-			   atomic_read(&ar->tx_nr_pending));
+		ar5523_dbg(ar, "TX Frame (%d pending) size %d\n",
+			   atomic_read(&ar->tx_nr_pending), skb->len);
 		error = usb_submit_urb(urb, GFP_KERNEL);
 		if (error) {
 			ar5523_err(ar, "error %d when submitting tx urb\n",
