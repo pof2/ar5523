@@ -1363,11 +1363,13 @@ static void ar5523_configure_filter(struct ieee80211_hw *hw,
 
 	*total_flags &= AR5523_SUPPORTED_FILTERS;
 
-	if (*total_flags & FIF_PROMISC_IN_BSS || *total_flags & FIF_OTHER_BSS)
-		filter |= UATH_FILTER_RX_PROM;
-
+	/* The filters seems strange. UATH_FILTER_RX_BCAST and
+	 * UATH_FILTER_RX_MCAST does not result in those frames being RXed.
+	 * The only way I have found to get [mb]cast frames seems to be
+	 * to set UATH_FILTER_RX_PROM. */
 	filter |= UATH_FILTER_RX_UCAST | UATH_FILTER_RX_MCAST |
-		  UATH_FILTER_RX_BCAST | UATH_FILTER_RX_BEACON;
+		  UATH_FILTER_RX_BCAST | UATH_FILTER_RX_BEACON |
+		  UATH_FILTER_RX_PROM;
 
 	ar5523_set_rxfilter(ar, 0, UATH_FILTER_OP_INIT);
 	ar5523_set_rxfilter(ar, filter, UATH_FILTER_OP_SET);
