@@ -1,10 +1,7 @@
 /*
- * Copyright (c) 2006
- *	Damien Bergamini <damien.bergamini@free.fr>
- * Copyright (c) 2007
- *	Christoph Hellwig <hch@lst.de>
- *
+ * Copyright (c) 2006 Damien Bergamini <damien.bergamini@free.fr>
  * Copyright (c) 2006 Sam Leffler, Errno Consulting
+ * Copyright (c) 2007 Christoph Hellwig <hch@lst.de>
  * Copyright (c) 2008-2009 Weongyo Jeong <weongyo@freebsd.org>
  * Copyright (c) 2012 Pontus Fuchs <pontus.fuchs@gmail.com>
  *
