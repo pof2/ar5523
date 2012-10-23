@@ -855,6 +855,7 @@ static void ar5523_tx_work_locked(struct ar5523 *ar)
 
 		desc->txqid = cpu_to_be32(txqid);
 
+		urb->transfer_flags = URB_ZERO_PACKET;
 		usb_fill_bulk_urb(urb, ar->dev, ar5523_data_tx_pipe(ar->dev),
 				  skb->data, skb->len, ar5523_data_tx_cb, skb);
 
